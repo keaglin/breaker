@@ -1,0 +1,23 @@
+{
+  "name": "breaker",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "db:migrate": "drizzle",
+    "db:push": "drizzle",
+    "db:pull": "drizzle"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@hono/sentry": "^1.2.0",
+    "drizzle-orm": "^0.33.0",
+    "hono": "^4.5.7",
+    "pg": "^8.12.0",
+    "playwright": "^1.46.1"
+  }
+}
