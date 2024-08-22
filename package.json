@@ -10,7 +10,7 @@
     "apps/*",
     "packages/*"
   ],
-  "dependencies": {},
+  "dependencies": { "winston": "^3.14.2" },
   "devDependencies": {
     "turbo": "^2.0.14"
   },
