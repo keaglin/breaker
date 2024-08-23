@@ -6,7 +6,7 @@ import { ulid } from 'ulid';
 import { z } from 'zod';
 
 // Define a schema for the incoming Miniflux feed data
-const minifluxFeedSchema = z.object({
+export const minifluxFeedSchema = z.object({
   id: z.number(),
   title: z.string(),
   feed_url: z.string(),
@@ -14,7 +14,7 @@ const minifluxFeedSchema = z.object({
   // Add other fields as needed
 });
 
-const minifluxEntrySchema = z.object({
+export const minifluxEntrySchema = z.object({
   id: z.number(),
   feed_id: z.number(),
   title: z.string(),
@@ -32,7 +32,7 @@ export async function syncWithMiniflux() {
   logger.info(`Retrieved ${minifluxFeeds.length} feeds from Miniflux`);
 
   for (const feed of minifluxFeeds) {
-    console.log('miniflux feed', feed);
+    // console.log('miniflux feed', feed);
     try {
       const validatedFeed = minifluxFeedSchema.parse(feed);
       logger.debug('Validated feed:', validatedFeed);

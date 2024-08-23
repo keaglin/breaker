@@ -21,8 +21,9 @@ export const minifluxApi = {
     return response.data;
   },
 
-  async getEntries(status = 'unread', limit = 100) {
-    const response = await apiClient.get(`/entries?status=${status}&limit=${limit}`);
+  async getEntries(params: { feed_id?: number; status?: string; limit?: number; offset?: number }) {
+    const queryParams = new URLSearchParams(params as Record<string, string>).toString();
+    const response = await apiClient.get(`/entries?${queryParams}`);
     return response.data;
   },
 };
