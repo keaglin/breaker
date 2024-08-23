@@ -3,12 +3,14 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "dev": "bun run src/index.ts",
+    "dev": "bun run --hot src/index.ts",
     "build": "bun build src/index.ts --outdir dist",
     "lint": "eslint src",
-    "db:migrate": "drizzle",
-    "db:push": "drizzle",
-    "db:pull": "drizzle"
+    "db:migrate": "bun run drizzle-kit generate",
+    "db:push": "bun run drizzle-kit push",
+    "db:studio": "bunx drizzle-kit studio",
+    "db:pull": "bun run drizzle-kit introspect",
+    "miniflux:sync": "bun run drizzle-kit introspect --config=services/miniflux/drizzle.config.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -19,10 +21,14 @@
   },
   "dependencies": {
     "@hono/sentry": "^1.2.0",
+    "@hono/swagger-ui": "^0.4.0",
+    "@hono/zod-openapi": "^0.15.3",
+    "axios": "^1.7.4",
     "drizzle-orm": "^0.33.0",
     "hono": "^4.5.7",
     "playwright": "^1.46.1",
     "postgres": "^3.4.4",
-    "ulid": "^2.3.0"
+    "ulid": "^2.3.0",
+    "zod": "^3.23.8"
   }
 }
