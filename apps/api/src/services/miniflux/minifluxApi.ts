@@ -12,17 +12,17 @@ const apiClient = axios.create({
 
 export const minifluxApi = {
   async getUsers() {
-    const response = await apiClient.get('/v1/users');
+    const response = await apiClient.get('/users');
     return response.data;
   },
 
   async getFeeds() {
-    const response = await apiClient.get('/v1/feeds');
+    const response = await apiClient.get('/feeds');
     return response.data;
   },
 
   async getEntries(status = 'unread', limit = 100) {
-    const response = await apiClient.get(`/v1/entries?status=${status}&limit=${limit}`);
+    const response = await apiClient.get(`/entries?status=${status}&limit=${limit}`);
     return response.data;
   },
 };

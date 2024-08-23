@@ -1,0 +1,1 @@
+ALTER TABLE "hono_entries" ALTER COLUMN "feed_id" SET DATA TYPE integer;
