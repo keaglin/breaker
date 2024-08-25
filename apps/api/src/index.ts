@@ -37,15 +37,15 @@ app.onError((err, c) => {
 // app.route('/api', categoriesRouter)
 // app.route('/api', entriesRouter)
 
-// app.get('/api/feeds', async (c) => {
-//   const feedsFromDb = await db.select().from(feeds).execute()
-//   return c.json(feedsFromDb)
-// })
+app.get('/api/feeds', async (c) => {
+  const feedsFromDb = await db.select().from(feeds).execute()
+  return c.json(feedsFromDb)
+})
 
-// app.get('/api/entries', async (c) => {
-//   const entriesFromDb = await db.select().from(entries).execute()
-//   return c.json(entriesFromDb)
-// })
+app.get('/api/entries', async (c) => {
+  const entriesFromDb = await db.select().from(entries).execute()
+  return c.json(entriesFromDb)
+})
 
 app.doc('/doc', {
   openapi: '3.0.0',

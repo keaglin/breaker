@@ -9,7 +9,7 @@ const rawArticles = await fetch('http://localhost:3000/api/entries').then(res =>
 const feeds = rawFeeds.map(feed => ({
   id: feed.id,
   name: feed.title.toUpperCase(),
-  unread: 0, // You might need to calculate this
+  unread: rawArticles.filter(article => article.feedId === feed.id && article.status === 'unread').length,
   url: feed.feedUrl
 }));
 
