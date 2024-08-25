@@ -1,6 +1,29 @@
 ---
 import ReaderComponent from "@/components/reader-responsive.tsx"
 import '@/styles/globals.css'
+
+const rawFeeds = await fetch('http://localhost:3000/api/feeds').then(res => res.json())
+const rawArticles = await fetch('http://localhost:3000/api/entries').then(res => res.json())
+
+// Transform feeds
+const feeds = rawFeeds.map(feed => ({
+  id: feed.id,
+  name: feed.title.toUpperCase(),
+  unread: 0, // You might need to calculate this
+  url: feed.feedUrl
+}));
+
+// Transform articles
+const articles = rawArticles.map(article => ({
+  id: article.id,
+  feedId: article.feedId,
+  title: article.title,
+  content: article.content,
+  date: new Date(article.lastSyncedAt).toISOString().split('T')[0], // Format date as YYYY-MM-DD
+  rawContent: article.content,
+  summary: article.summary || "No summary available.",
+  keyPoints: article.keypoints ? article.keypoints : ["No key points available."]
+}));
 ---
 <html lang="en">
 <head>
@@ -9,6 +32,6 @@ import '@/styles/globals.css'
     <title>Reader</title>
 </head>
 <body>
-    <ReaderComponent client:load />
+    <ReaderComponent client:load feeds={feeds} articles={articles} />
 </body>
 </html>

@@ -1,7 +1,7 @@
-import { db } from '../../db';
-import { honoFeeds, honoEntries } from '../../db/honoSchema';
+import { db } from '../../../db';
+import { honoFeeds, honoEntries } from '../../../db/schema';
 import { minifluxApi } from './minifluxApi';
-import logger from '../../../../../packages/utils/src/logger';
+import logger from '../../../../../../packages/utils/src/logger';
 import { ulid } from 'ulid';
 import { minifluxFeedSchema, minifluxEntrySchema } from './minifluxSync';
 
