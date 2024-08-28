@@ -6,8 +6,6 @@ import { db } from './db';
 import { entries } from './db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
-import { initializeMinifluxSync } from './services/miniflux/sync';
-import { minifluxClient, MinifluxClient } from './services/miniflux/client';
 import { fetchNewData } from './services/miniflux/fetcher';
 import { storeProcessedData, type StoredEntry } from './services/miniflux/storeData';
 import invariant from 'tiny-invariant';
