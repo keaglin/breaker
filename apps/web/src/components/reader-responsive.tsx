@@ -153,6 +153,12 @@ export default function Component({ feeds, articles }) {
               <li key={index}>{point}</li>
             ))}
           </ul>
+          <div className="font-bold mt-2">TAKEAWAYS:</div>
+          <ul className="list-disc pl-5">
+            {article.takeaways.map((point, index) => (
+              <li key={index}>{point}</li>
+            ))}
+          </ul>
         </div>
         {showRawFeed ? (
           <pre className="whitespace-pre-wrap border-2 border-black p-2">
