@@ -1,6 +1,6 @@
 import { MinifluxClient } from './client';
 import { fetchNewData } from './fetcher';
-import { processEntry } from '../entry-processor';
+import { queueEntryForProcessing } from '../entry-processor';
 import { storeProcessedData } from './storeData';
 import logger from '@/packages/utils/src/logger';
 import invariant from 'tiny-invariant';
@@ -24,18 +24,17 @@ export async function syncMinifluxData() {
 
     logger.info(`Fetched ${newFeeds.length} new feeds and ${newEntries.length} new entries`);
 
-    console.debug(`newEntries`, newEntries.length);
     if (Array.isArray(newEntries)) {
-      console.debug(`newEntries`, newEntries[0]);
-      // const processedEntries = await Promise.all(newEntries.map(entry => {
-      //   console.debug(`Processing entry`, entry.title);
-      //   return processEntry(entry);
-      // }));
-      await storeProcessedData(newFeeds, newEntries);
+      logger.info(`Queueing ${newEntries.length} entries for processing`);
+      for (const entry of newEntries) {
+        await queueEntryForProcessing(entry.id.toString(), entry.content);
+        logger.debug(`Queued entry for processing: ${entry.id}`);
+      }
     } else {
-      console.debug(`newEntries is not an array`, typeof newEntries);
+      logger.warn(`newEntries is not an array`, typeof newEntries);
     }
 
+    await storeProcessedData(newFeeds, newEntries);
 
     logger.info('Miniflux sync completed successfully');
   } catch (error) {

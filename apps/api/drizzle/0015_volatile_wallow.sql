@@ -1,0 +1,1 @@
+ALTER TABLE "entries" ADD COLUMN "processed" boolean DEFAULT false NOT NULL;

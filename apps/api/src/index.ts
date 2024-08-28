@@ -55,7 +55,7 @@ app.doc('/doc', {
   },
 })
 
-
+// Use to start the sync service to keep the database in sync with miniflux
 // startSyncService(10)
 
 // Use this to seed the database with all the data from miniflux

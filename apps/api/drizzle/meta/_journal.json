@@ -85,6 +85,34 @@
       "when": 1724480705796,
       "tag": "0011_early_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1724631984148,
+      "tag": "0012_parallel_alex_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1724632373665,
+      "tag": "0013_high_trauma",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1724632591787,
+      "tag": "0014_wooden_sentry",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1724634189459,
+      "tag": "0015_volatile_wallow",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "trends" ALTER COLUMN "time" SET DATA TYPE timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "time_keyword_idx" ON "trends" USING btree ("time","keyword");

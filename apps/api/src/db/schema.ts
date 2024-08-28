@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, boolean, real, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 
 // Sync metadata table
 export const syncMetadata = pgTable('sync_metadata', {
@@ -37,4 +37,18 @@ export const entries = pgTable('entries', {
   keypoints: text('keypoints').array(),
   takeaways: text('takeaways').array(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+  processed: boolean('processed').notNull().default(false)
+});
+
+export const trends = pgTable('trends', {
+  time: timestamp('time', { withTimezone: true }).notNull(),
+  keyword: text('keyword').notNull(),
+  trendType: text('trend_type').notNull(),
+  frequency: integer('frequency').notNull(),
+  burstScore: real('burst_score'),
+  data: text('data'),
+}, (table) => {
+  return {
+    pk: primaryKey({ columns: [table.time, table.keyword] }),
+  };
 });
