@@ -7,7 +7,7 @@ import { entries } from './db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { initializeMinifluxSync } from './services/miniflux/sync';
-import { MinifluxClient } from './services/miniflux/client';
+import { minifluxClient, MinifluxClient } from './services/miniflux/client';
 import { fetchNewData } from './services/miniflux/fetcher';
 import { storeProcessedData } from './services/miniflux/storeData';
 import invariant from 'tiny-invariant';
@@ -24,7 +24,7 @@ const trendAnalyzer = new TrendAnalyzer();
 
 const SUMMARY_BATCH_SIZE = 10;
 const SUMMARY_INTERVAL_MINUTES = 5;
-
+const MINIFLUX_SYNC_INTERVAL_MINUTES = 10;
 const pgbossConfig = {
   connectionString: process.env.DATABASE_URL as string,
   // ULID configuration
@@ -85,7 +85,7 @@ export async function initializePgBoss() {
     await setupEntrySummarizationJobs();
     logger.info('Entry summarization jobs set up');
 
-    await setupMinifluxSync(10);
+    await setupMinifluxSync(MINIFLUX_SYNC_INTERVAL_MINUTES);
     logger.info('Miniflux sync job set up');
 
     logger.info('All job handlers set up');
@@ -228,11 +228,6 @@ async function setupMinifluxSync(intervalMinutes: number) {
   // Set up the work handler for the sync job
   await boss.work(SYNC_JOB_NAME, async ([job]) => {
     logger.info(`Starting Miniflux sync job ${job.id}`);
-
-    const minifluxClient = new MinifluxClient(
-      process.env.MINIFLUX_API_URL as string,
-      process.env.MINIFLUX_API_KEY as string
-    );
 
     try {
       const { newFeeds, newEntries } = await fetchNewData(minifluxClient);
