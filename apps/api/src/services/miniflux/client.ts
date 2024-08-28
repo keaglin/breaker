@@ -1,11 +1,12 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import logger from '../../../../../packages/utils/src/logger';
+import invariant from 'tiny-invariant';
 
 export class MinifluxClient {
+  private static instance: MinifluxClient;
   private apiClient: AxiosInstance;
 
-  constructor(apiUrl: string, apiKey: string) {
-    console.debug('MinifluxClient constructor', apiUrl, apiKey);
+  private constructor(apiUrl: string, apiKey: string) {
     this.apiClient = axios.create({
       baseURL: apiUrl,
       headers: {
@@ -37,6 +38,19 @@ export class MinifluxClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  public static getInstance(): MinifluxClient {
+    if (!MinifluxClient.instance) {
+      invariant(process.env.MINIFLUX_API_URL, 'MINIFLUX_API_URL is not set');
+      invariant(process.env.MINIFLUX_API_KEY, 'MINIFLUX_API_KEY is not set');
+
+      MinifluxClient.instance = new MinifluxClient(
+        process.env.MINIFLUX_API_URL,
+        process.env.MINIFLUX_API_KEY
+      );
+    }
+    return MinifluxClient.instance;
   }
 
   async seedDatabase() {
@@ -131,3 +145,6 @@ export class MinifluxClient {
     }
   }
 }
+
+// Export the singleton instance
+export const minifluxClient = MinifluxClient.getInstance();

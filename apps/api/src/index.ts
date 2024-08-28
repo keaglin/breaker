@@ -10,9 +10,10 @@ import entriesRouter from './api/entries'
 import { entries, feeds } from './db/schema';
 import { db } from './db';
 import { initializeMinifluxSync } from './services/miniflux/sync';
-import { MinifluxClient } from './services/miniflux/client';
+import { minifluxClient, MinifluxClient } from './services/miniflux/client';
 import { storeProcessedData } from './services/miniflux/storeData';
 import { initializePgBoss } from './pgboss';
+import { desc } from 'drizzle-orm';
 
 const app = new OpenAPIHono()
 
@@ -47,6 +48,26 @@ app.get('/api/entries', async (c) => {
   const entriesFromDb = await db.select().from(entries).execute()
   return c.json(entriesFromDb)
 })
+
+app.post('/api/refresh-feeds', async (c) => {
+  try {
+    // Get the most recently fetched feed ID from the database
+    const lastFetchedFeed = await db.select({ id: feeds.minifluxId })
+      .from(feeds)
+      .orderBy(desc(feeds.minifluxId))
+      .limit(1)
+      .execute();
+
+    const lastFeedId = lastFetchedFeed[0]?.id || 0;
+    logger.info(`Most recently fetched feed ID: ${lastFeedId}`);
+
+    // Use this ID to refresh feeds newer than this one
+    await minifluxClient.refreshFeed(lastFeedId);
+    return c.json({ message: 'All feeds refreshed successfully' }, 200);
+  } catch (error) {
+    return c.json({ error: 'Failed to refresh feeds' }, 500);
+  }
+});
 
 app.doc('/doc', {
   openapi: '3.0.0',
