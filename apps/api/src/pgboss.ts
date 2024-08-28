@@ -124,7 +124,8 @@ async function initializeQueues() {
   ];
 
   const existingQueues = await boss.getQueues();
-  const queuesToCreate = requiredQueues.filter(queue => !existingQueues.includes(queue));
+  console.debug('Existing queues:', existingQueues);
+  const queuesToCreate = requiredQueues.filter(queue => !existingQueues.map(q => q.name).includes(queue));
 
   for (const queue of queuesToCreate) {
     try {
