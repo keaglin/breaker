@@ -4,7 +4,7 @@ import { TrendAnalyzer } from './trend-analyzer';
 import { processEntry } from './entry-processor';
 import { db } from './db';
 import { entries } from './db/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, and, gte, lt } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { fetchNewData } from './services/miniflux/fetcher';
 import { storeProcessedData, type StoredEntry } from './services/miniflux/storeData';
@@ -122,7 +122,7 @@ async function initializeQueues() {
   ];
 
   const existingQueues = await boss.getQueues();
-  console.debug('Existing queues:', existingQueues);
+  // console.debug('Existing queues:', existingQueues);
   const queuesToCreate = requiredQueues.filter(queue => !existingQueues.map(q => q.name).includes(queue));
 
   for (const queue of queuesToCreate) {
@@ -147,29 +147,30 @@ async function setupTrendAnalysisJobs() {
   logger.debug('Setting up trend analysis jobs');
   await boss.work('analyze-trends-hourly', async ([job]) => {
     logger.info(`Running hourly trend processing job ${job.id}`);
-    const unprocessedEntries = await db.select({ id: entries.id })
+
+    const now = new Date();
+    const batchHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() - 1, 0, 0, 0);
+    const batchHourEnd = new Date(batchHourStart.getTime() + 60 * 60 * 1000);
+
+    const batchEntries = await db.select({ id: entries.id, content: entries.content })
       .from(entries)
-      .where(eq(entries.processedForTrends, false))
+      .where(
+        and(
+          gte(entries.createdAt, batchHourStart),
+          lt(entries.createdAt, batchHourEnd)
+        )
+      )
       .orderBy(entries.id);
 
-    if (unprocessedEntries.length > 0) {
-      const startId = unprocessedEntries[0].id;
-      const endId = unprocessedEntries[unprocessedEntries.length - 1].id;
-      await boss.send('process-entry-batch-for-trends', { startId, endId });
+    const validBatchEntries = batchEntries.filter((entry): entry is { id: string; content: string } => entry.content !== null);
+
+    if (validBatchEntries.length > 0) {
+      logger.debug(`Processing ${validBatchEntries.length} entries for hour ${batchHourStart.toISOString()}`);
+      await trendAnalyzer.processBatch(validBatchEntries, batchHourStart);
     }
 
     logger.info(`Completed hourly trend processing job ${job.id}`);
-    return { success: true, processedCount: unprocessedEntries.length };
-  });
-
-  await boss.work<{ startId: string, endId: string }>('analyze-trends-hourly', async ([job]) => {
-    const { startId, endId } = job.data;
-    logger.info(`Processing trend batch job ${job.id} for entries ${startId} to ${endId}`);
-
-    await trendAnalyzer.processBatch(startId, endId);
-
-    logger.info(`Completed trend batch job ${job.id}`);
-    return { success: true };
+    return { success: true, processedCount: batchEntries.length, batchHour: batchHourStart.toISOString() };
   });
 
   // Daily trend analysis
@@ -194,6 +195,9 @@ async function setupTrendAnalysisJobs() {
     logger.info(`Completed weekly trend analysis job ${job.id}`);
     return { success: true, weeklyTrends };
   });
+
+  // Optionally, run an initial analysis immediately
+  await boss.send({ name: 'analyze-trends-hourly' });
 }
 
 async function setupEntrySummarizationJobs() {

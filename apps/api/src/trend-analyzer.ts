@@ -9,7 +9,6 @@ import type { ArrayBufferSink } from 'bun';
 export class TrendAnalyzer {
   private db: ReturnType<typeof drizzle>;
   private sink: ArrayBufferSink;
-  private batchSize: number = 100;
   private trendCounts: Map<string, number> = new Map();
 
   constructor() {
@@ -18,37 +17,45 @@ export class TrendAnalyzer {
     this.sink.start({ highWaterMark: 1024 * 1024, stream: true }); // 1MB buffer
   }
 
-  async processBatch(startId: string, endId: string) {
-    const batchEntries = await this.db.select()
-      .from(entries)
-      .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId} AND ${entries.processedForTrends} = false`)
-      .orderBy(entries.id);
+  async processBatch(batchEntries: Array<{ id: string, content: string }>, batchHour: Date) {
+    logger.debug(`Processing ${batchEntries.length} entries for hour ${batchHour.toISOString()}`);
 
     for (const entry of batchEntries) {
       await this.analyzeEntry(entry);
     }
 
-    await this.saveTrends();
-    await this.markEntriesAsProcessed(startId, endId);
+    await this.saveTrends(batchHour);
   }
 
-  private async analyzeEntry(entry: any) {
-    const words = removeStopwords(entry.content.toLowerCase().split(/\W+/));
+  private async analyzeEntry(entry: { id: string, content: string }) {
+    const originalWords = entry.content.toLowerCase().split(/\W+/);
+    const words = removeStopwords(originalWords);
+
+    logger.debug(`Original word count: ${originalWords.length}`);
+    logger.debug(`Word count after removing stopwords: ${words.length}`);
+    logger.debug(`Sample of original words: ${originalWords.slice(0, 10).join(', ')}`);
+    logger.debug(`Sample of words after removing stopwords: ${words.slice(0, 10).join(', ')}`);
 
     words.forEach(word => {
       this.trendCounts.set(word, (this.trendCounts.get(word) || 0) + 1);
     });
 
-    if (this.trendCounts.size >= this.batchSize) {
-      await this.saveTrends();
-    }
+    logger.debug(`Current trend count size: ${this.trendCounts.size}`);
+
+    // Remove this condition
+    // if (this.trendCounts.size >= this.batchSize) {
+    //   await this.saveTrends(batchHour);
+    // }
   }
 
-  private async saveTrends() {
+  private async saveTrends(batchHour: Date) {
     const now = new Date();
     const trendEntries = Array.from(this.trendCounts.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 100); // Top 100 trends
+
+    logger.debug(`Saving ${trendEntries.length} trends`);
+    logger.debug(`Sample trends: ${JSON.stringify(trendEntries.slice(0, 5))}`);
 
     for (const [keyword, frequency] of trendEntries) {
       const trendBuffer = this.trendToBuffer(keyword, frequency);
