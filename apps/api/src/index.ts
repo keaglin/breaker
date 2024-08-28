@@ -9,9 +9,10 @@ import { syncWithMiniflux } from './services/miniflux/old/minifluxSync';
 import entriesRouter from './api/entries'
 import { entries, feeds } from './db/schema';
 import { db } from './db';
-import { startSyncService, syncMinifluxData } from './services/miniflux/sync';
+import { initializeMinifluxSync } from './services/miniflux/sync';
 import { MinifluxClient } from './services/miniflux/client';
 import { storeProcessedData } from './services/miniflux/storeData';
+import { initializePgBoss } from './pgboss';
 
 const app = new OpenAPIHono()
 
@@ -66,6 +67,9 @@ app.doc('/doc', {
 // }).catch((error: unknown) => {
 //   console.error('Failed to seed database', error);
 // });
+
+await initializePgBoss()
+
 const port = 3000;
 console.log(`Server is running on http://localhost:${port}`);
 

@@ -37,7 +37,8 @@ export const entries = pgTable('entries', {
   keypoints: text('keypoints').array(),
   takeaways: text('takeaways').array(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
-  processed: boolean('processed').notNull().default(false)
+  processedForTrends: boolean('processed_for_trends').notNull().default(false),
+  processedForSummary: boolean('processed_for_summary').notNull().default(false),
 });
 
 export const trends = pgTable('trends', {

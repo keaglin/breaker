@@ -1,80 +1,120 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq, desc, sql } from 'drizzle-orm';
-// import { Pool } from 'pg';
 import { removeStopwords } from 'stopword';
 import { trends, entries } from './db/schema';
 import { db } from './db';
+import logger from '@/packages/utils/src/logger';
 import type { ArrayBufferSink } from 'bun';
 
 export class TrendAnalyzer {
   private db: ReturnType<typeof drizzle>;
   private sink: ArrayBufferSink;
+  private batchSize: number = 100;
+  private trendCounts: Map<string, number> = new Map();
 
-  constructor(dbConfig: any) {
+  constructor() {
     this.db = db;
     this.sink = new Bun.ArrayBufferSink();
-    this.sink.start({ highWaterMark: 1024 * 1024 }); // 1MB buffer
+    this.sink.start({ highWaterMark: 1024 * 1024, stream: true }); // 1MB buffer
   }
 
-  async startProcessing() {
-    const stream = new ReadableStream({
-      pull: async (controller) => {
-        const unprocessedEntries = await this.db.select().from(entries)
-          .where(eq(entries.processed, false))
-          .orderBy(desc(entries.publishedAt))
-          .limit(50);
+  async processBatch(startId: number, endId: number) {
+    const batchEntries = await this.db.select()
+      .from(entries)
+      .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId} AND ${entries.processedForTrends} = false`)
+      .orderBy(entries.id);
 
-        for (const entry of unprocessedEntries) {
-          controller.enqueue(entry);
-        }
-        if (unprocessedEntries.length < 50) {
-          await new Promise(resolve => setTimeout(resolve, 60000)); // Wait for 1 minute before next fetch
-        }
-      }
-    });
+    for (const entry of batchEntries) {
+      await this.analyzeEntry(entry);
+    }
 
-    const analyzer = new TransformStream({
-      transform: async (entry, controller) => {
-        await this.analyzeEntry(entry);
-        controller.enqueue(entry);
-      }
-    });
-
-    const sink = new WritableStream({
-      write: async (entry) => {
-        await this.db.update(entries)
-          .set({ processed: true })
-          .where(eq(entries.id, entry.id));
-      }
-    });
-
-    await stream.pipeThrough(analyzer).pipeTo(sink);
+    await this.saveTrends();
+    await this.markEntriesAsProcessed(startId, endId);
   }
 
   private async analyzeEntry(entry: any) {
     const words = removeStopwords(entry.content.toLowerCase().split(/\W+/));
-    const trendCounts = new Map();
 
     words.forEach(word => {
-      trendCounts.set(word, (trendCounts.get(word) || 0) + 1);
+      this.trendCounts.set(word, (this.trendCounts.get(word) || 0) + 1);
     });
 
-    // Save trend data
-    const trendData = Array.from(trendCounts.entries()).map(([keyword, frequency]) => ({
-      keyword,
-      frequency
-    }));
-
-    await this.db.insert(trends).values({
-      time: new Date(),
-      trendType: 'keyword_frequency',
-      keyword: trendData[0]?.keyword || '', // Just inserting the top keyword for simplicity
-      frequency: trendData[0]?.frequency || 0,
-      data: JSON.stringify(trendData)
-    });
+    if (this.trendCounts.size >= this.batchSize) {
+      await this.saveTrends();
+    }
   }
 
-  async getRecentTrends() {
+  private async saveTrends() {
+    const now = new Date();
+    const trendEntries = Array.from(this.trendCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 100); // Top 100 trends
+
+    for (const [keyword, frequency] of trendEntries) {
+      const trendBuffer = this.trendToBuffer(keyword, frequency);
+      this.sink.write(trendBuffer);
+    }
+
+    const trendsBuffer = this.sink.flush();
+    const trendsFromBuffer = this.bufferToTrends(trendsBuffer as ArrayBuffer);
+
+    await this.db.transaction(async (tx) => {
+      for (const trend of trendsFromBuffer) {
+        await tx.insert(trends).values({
+          time: now,
+          keyword: trend.keyword,
+          trendType: 'keyword_frequency',
+          frequency: trend.frequency,
+          data: JSON.stringify(trend)
+        }).onConflictDoUpdate({
+          target: [trends.time, trends.keyword],
+          set: { frequency: sql`${trends.frequency} + ${trend.frequency}` }
+        });
+      }
+    });
+
+    logger.info(`Saved ${trendsFromBuffer.length} trends at ${now}`);
+    this.trendCounts.clear();
+  }
+
+  private trendToBuffer(keyword: string, frequency: number): ArrayBuffer {
+    const encoder = new TextEncoder();
+    const keywordBuffer = encoder.encode(keyword);
+    const buffer = new ArrayBuffer(4 + 4 + keywordBuffer.byteLength);
+    const view = new DataView(buffer);
+    view.setUint32(0, keywordBuffer.byteLength, true);
+    view.setUint32(4, frequency, true);
+    new Uint8Array(buffer, 8).set(keywordBuffer);
+    return buffer;
+  }
+
+  private bufferToTrends(buffer: ArrayBuffer): { keyword: string; frequency: number }[] {
+    const trends: { keyword: string; frequency: number }[] = [];
+    const view = new DataView(buffer);
+    let offset = 0;
+
+    while (offset < buffer.byteLength) {
+      const keywordLength = view.getUint32(offset, true);
+      offset += 4;
+      const frequency = view.getUint32(offset, true);
+      offset += 4;
+      const keywordBuffer = buffer.slice(offset, offset + keywordLength);
+      const keyword = new TextDecoder().decode(keywordBuffer);
+      offset += keywordLength;
+
+      trends.push({ keyword, frequency });
+    }
+
+    return trends;
+  }
+
+  private async markEntriesAsProcessed(startId: number, endId: number) {
+    await this.db.update(entries)
+      .set({ processedForTrends: true })
+      .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId}`);
+  }
+
+  async getDailyTrends() {
     return this.db.select({
       keyword: trends.keyword,
       totalFrequency: sql`sum(${trends.frequency})`.as('total_frequency')
@@ -86,8 +126,22 @@ export class TrendAnalyzer {
       .limit(10);
   }
 
+  async getWeeklyTrends() {
+    return this.db.select({
+      keyword: trends.keyword,
+      totalFrequency: sql<number>`sum(${trends.frequency})`.as('total_frequency'),
+      avgDailyFrequency: sql<number>`avg(${trends.frequency})`.as('avg_daily_frequency'),
+      distinctDays: sql<number>`count(distinct date_trunc('day', ${trends.time}))`.as('distinct_days')
+    })
+      .from(trends)
+      .where(sql`${trends.time} > NOW() - INTERVAL '7 days'`)
+      .groupBy(trends.keyword)
+      .having(sql`count(distinct date_trunc('day', ${trends.time})) >= 3`) // Trend appeared in at least 3 distinct days
+      .orderBy(desc(sql`total_frequency`))
+      .limit(20);
+  }
+
   async detectBursts() {
-    // This query is complex and might be easier to do with raw SQL
     const result = await this.db.execute(sql`
       WITH hourly_counts AS (
         SELECT

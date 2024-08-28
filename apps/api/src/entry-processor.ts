@@ -7,6 +7,14 @@ import logger from '@/packages/utils/src/logger';
 invariant(process.env.GOOGLE_AI_API_KEY, 'GOOGLE_AI_API_KEY is not set');
 invariant(process.env.DATABASE_URL, 'DATABASE_URL is not set');
 
+/**
+ * Gemini 1.5 Flash
+ * Current API limits
+ * 15 RPM (requests per minute)
+ * 1 million TPM (tokens per minute)
+ * 1,500 RPD (requests per day)
+ */
+
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
 const model = genAI.getGenerativeModel({
   model: 'gemini-1.5-flash',
