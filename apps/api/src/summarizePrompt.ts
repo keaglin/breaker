@@ -18,6 +18,13 @@ Takeaways should be:
 
 Output your summary in the following JSON structure:
 
+interface SummaryResult {
+  summary: string;
+  keypoints: string[];
+  takeaways: string[];
+}
+
+For example:
 {
   "summary": "20-word summary here",
   "keypoints": [

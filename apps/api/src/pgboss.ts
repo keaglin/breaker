@@ -25,6 +25,30 @@ const trendAnalyzer = new TrendAnalyzer();
 const SUMMARY_BATCH_SIZE = 10;
 const SUMMARY_INTERVAL_MINUTES = 5;
 const MINIFLUX_SYNC_INTERVAL_MINUTES = 10;
+// API rate limit constants
+const REQUESTS_PER_MINUTE = 15;
+const REQUESTS_PER_DAY = 1500;
+const TOKENS_PER_MINUTE = 1000000;
+
+let tokenUsageLastMinute = 0;
+let lastMinuteReset = Date.now();
+
+// Adjust these values based on your average token usage per request
+const ESTIMATED_TOKENS_PER_REQUEST = 1000;
+
+// Min(15 requests per minute, 1000) = 15
+const SUMMARIZE_RATE_LIMIT = Math.min(REQUESTS_PER_MINUTE, Math.floor(TOKENS_PER_MINUTE / ESTIMATED_TOKENS_PER_REQUEST));
+const SUMMARIZE_RATE_LIMIT_INTERVAL = 60 * 1000; // 60 seconds in milliseconds
+
+// Daily limit tracker
+let dailyRequestCount = 0;
+const DAILY_RESET_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+// Reset daily count every 24 hours
+setInterval(() => {
+  dailyRequestCount = 0;
+}, DAILY_RESET_INTERVAL);
+
 const pgbossConfig = {
   connectionString: process.env.DATABASE_URL as string,
   // ULID configuration
@@ -171,8 +195,8 @@ async function setupEntrySummarizationJobs() {
   logger.debug('Setting up entry summarization job');
   await boss.schedule('queue-entries-for-summaries', `*/${SUMMARY_INTERVAL_MINUTES} * * * *`);
 
-  // Summarize entries
-  logger.debug('Setting up summarize entry job');
+  // Summarize entries with rate limiting
+  logger.debug('Setting up summarize entry job with rate limiting');
   await boss.createQueue('summarize-entry');
 
   await boss.work('queue-entries-for-summaries', async ([job]) => {
@@ -184,19 +208,51 @@ async function setupEntrySummarizationJobs() {
       .limit(SUMMARY_BATCH_SIZE);
 
     for (const entry of unprocessedEntries) {
-      await boss.send('summarize-entry', { entryId: entry.id, content: entry.content });
+      await boss.send('summarize-entry', { entryId: entry.id, content: entry.content }, {
+        singletonKey: `summarize-entry`,
+        singletonSeconds: 4, // 15 requests per minute max
+        singletonNextSlot: true,
+        retryLimit: 3,
+        retryDelay: SUMMARIZE_RATE_LIMIT_INTERVAL / SUMMARIZE_RATE_LIMIT,
+        retryBackoff: true
+      });
     }
 
     logger.info(`Queued ${unprocessedEntries.length} entries for summarization`);
     return { success: true, queuedCount: unprocessedEntries.length };
   });
 
-  await boss.work<{ entryId: string, content: string }>('summarize-entry', async ([job]) => {
+  await boss.work<{ entryId: string, content: string }>('summarize-entry', { batchSize: SUMMARIZE_RATE_LIMIT }, async ([job]) => {
     const { entryId, content } = job.data;
     logger.info(`Processing summary for entry ${entryId}`);
 
+    // Check daily limit
+    if (dailyRequestCount >= REQUESTS_PER_DAY) {
+      logger.warn('Daily request limit reached. Skipping job.');
+      return { success: false, entryId, error: 'Daily request limit reached' };
+    }
+
+    // Check and reset per-minute token usage
+    const now = Date.now();
+    if (now - lastMinuteReset > 60000) {
+      tokenUsageLastMinute = 0;
+      lastMinuteReset = now;
+    }
+
+    // Estimate token usage
+    const estimatedTokens = content.split(/\s+/).length * 1.3;
+
+    if (tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
+      logger.warn('Token per minute limit reached. Failing job to retry later.');
+      return { success: false, entryId, error: 'Rate limit reached' };
+    }
+
     try {
+      dailyRequestCount++;
+      tokenUsageLastMinute += estimatedTokens;
+
       const summaryResult = await processEntry(content);
+      console.debug('Summary result', summaryResult);
       if (summaryResult instanceof Error) {
         logger.error(`Error processing summary for entry ${entryId}:`, summaryResult);
         return { success: false, entryId, error: summaryResult };
@@ -276,19 +332,19 @@ export async function queueEntryBatchForTrendProcessing(startId: number, endId: 
   return jobId;
 }
 
-export async function processNewEntries(newEntries: any[]) {
-  const batchSize = 100; // Adjust as needed for trend analysis
-  for (let i = 0; i < newEntries.length; i += batchSize) {
-    const batchEntries = newEntries.slice(i, i + batchSize);
-    const startId = batchEntries[0].id;
-    const endId = batchEntries[batchEntries.length - 1].id;
-    await queueEntryBatchForTrendProcessing(startId, endId);
-  }
+// export async function processNewEntries(newEntries: any[]) {
+//   const batchSize = 100; // Adjust as needed for trend analysis
+//   for (let i = 0; i < newEntries.length; i += batchSize) {
+//     const batchEntries = newEntries.slice(i, i + batchSize);
+//     const startId = batchEntries[0].id;
+//     const endId = batchEntries[batchEntries.length - 1].id;
+//     await queueEntryBatchForTrendProcessing(startId, endId);
+//   }
 
-  // Queue entries for summarization
-  for (const entry of newEntries) {
-    await boss.send('summarize-entry', { entryId: entry.id, content: entry.content });
-  }
-}
+//   // Queue entries for summarization
+//   for (const entry of newEntries) {
+//     await boss.send('summarize-entry', { entryId: entry.id, content: entry.content });
+//   }
+// }
 
 

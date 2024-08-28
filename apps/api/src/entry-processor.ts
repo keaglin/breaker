@@ -29,13 +29,17 @@ interface SummaryResult {
 export async function processEntry(content: string): Promise<SummaryResult | Error> {
   const prompt = `${summarizePrompt}\n\n${content}`;
 
-  const result = await model.generateContent(prompt);
-  // logger.debug('Raw summary result', result);
-
-  const rawSummary = result.response.candidates?.[0]?.content?.parts?.[0]?.text;
-
   try {
-    const parsedSummary: SummaryResult = JSON.parse(rawSummary ?? '');
+    const result = await model.generateContent(prompt);
+    // logger.debug('Raw summary result', result);
+
+    const summary = result.response.candidates?.[0]?.content?.parts?.[0]?.text;
+    console.debug('Raw summary', summary);
+
+    const parsedSummary: SummaryResult = JSON.parse(summary ?? '');
+    //   console.debug('Parsed summary', parsedSummary);
+    //   // throw new Error('test');
+    //   return parsedSummary;
     return parsedSummary;
   } catch (error) {
     logger.error(`Error parsing summary:`, error);

@@ -10,8 +10,10 @@ const feeds = rawFeeds.map(feed => ({
   id: feed.id,
   name: feed.title.toUpperCase(),
   unread: rawArticles.filter(article => article.feedId === feed.id && article.status === 'unread').length,
-  url: feed.feedUrl
+  url: feed.siteUrl
 }));
+
+console.log('feeds', feeds[0])
 
 // Transform articles
 const articles = rawArticles.map(article => ({
@@ -22,7 +24,8 @@ const articles = rawArticles.map(article => ({
   date: new Date(article.lastSyncedAt).toISOString().split('T')[0], // Format date as YYYY-MM-DD
   rawContent: article.content,
   summary: article.summary || "No summary available.",
-  keyPoints: article.keypoints ? article.keypoints : ["No key points available."]
+  keyPoints: article.keypoints ? article.keypoints : ["No key points available."],
+  takeaways: article.takeaways ? article.takeaways : ["No takeaways available."]
 }));
 ---
 <html lang="en">
