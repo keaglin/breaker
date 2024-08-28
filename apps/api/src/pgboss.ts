@@ -83,7 +83,6 @@ const pgbossConfig = {
   newJobCheckInterval: 1000, // Check for new jobs every second
 
   // Additional options
-  noSupervisor: false, // This instance will run maintenance
   max: 10, // Maximum number of connections in the pool
 
   // Logging (if you want to integrate with your logging system)
@@ -102,19 +101,10 @@ export async function initializePgBoss() {
     });
     boss.on('stopped', () => logger.info('PgBoss stopped'));
 
-
     await boss.start();
     logger.info('PgBoss initialized and started');
 
-    await setupTrendAnalysisJobs();
-    logger.info('Trend analysis jobs set up');
-
-    await setupEntrySummarizationJobs();
-    logger.info('Entry summarization jobs set up');
-
-    await setupMinifluxSync(MINIFLUX_SYNC_INTERVAL_MINUTES);
-    logger.info('Miniflux sync job set up');
-
+    await initializeQueues();
     logger.info('All job handlers set up');
 
   } catch (error) {
@@ -123,28 +113,39 @@ export async function initializePgBoss() {
   }
 }
 
+async function initializeQueues() {
+  const requiredQueues = [
+    'analyze-trends-hourly',
+    'analyze-trends-daily',
+    'analyze-trends-weekly',
+    'queue-entries-for-summaries',
+    'summarize-entry',
+    SYNC_JOB_NAME
+  ];
+
+  const existingQueues = await boss.getQueues();
+  const queuesToCreate = requiredQueues.filter(queue => !existingQueues.includes(queue));
+
+  for (const queue of queuesToCreate) {
+    try {
+      await boss.createQueue(queue);
+      logger.info(`Created queue: ${queue}`);
+    } catch (error) {
+      logger.warn(`Failed to create queue ${queue}, it may already exist`, error);
+    }
+  }
+
+  await setupTrendAnalysisJobs();
+  await setupEntrySummarizationJobs();
+  await setupMinifluxSync(MINIFLUX_SYNC_INTERVAL_MINUTES);
+}
+
 async function setupTrendAnalysisJobs() {
   // Hourly trend processing
   logger.debug('Setting up trend analysis queue');
-  await boss.createQueue('analyze-trends-hourly');
-
-  logger.debug('Setting up trend analysis jobs');
   await boss.schedule('analyze-trends-hourly', '0 * * * *');
 
-
-  // Daily trend analysis
-  logger.debug('Setting up daily trend analysis queue');
-  await boss.createQueue('analyze-trends-daily');
-  logger.debug('Setting up daily trend analysis job');
-  await boss.schedule('analyze-trends-daily', '0 0 * * *');
-
-
-  // Weekly trend analysis
-  logger.debug('Setting up weekly trend analysis queue');
-  await boss.createQueue('analyze-trends-weekly');
-  logger.debug('Setting up weekly trend analysis job');
-  await boss.schedule('analyze-trends-weekly', '0 0 * * 0');
-
+  logger.debug('Setting up trend analysis jobs');
   await boss.work('analyze-trends-hourly', async ([job]) => {
     logger.info(`Running hourly trend processing job ${job.id}`);
     const unprocessedEntries = await db.select({ id: entries.id })
@@ -172,6 +173,10 @@ async function setupTrendAnalysisJobs() {
     return { success: true };
   });
 
+  // Daily trend analysis
+  logger.debug('Setting up daily trend analysis queue');
+  await boss.schedule('analyze-trends-daily', '0 0 * * *');
+  logger.debug('Setting up daily trend analysis job');
   await boss.work('analyze-trends-daily', async ([job]) => {
     logger.info(`Running daily trend analysis job ${job.id}`);
     const recentTrends = await trendAnalyzer.getDailyTrends();
@@ -180,6 +185,10 @@ async function setupTrendAnalysisJobs() {
     return { success: true, recentTrends, bursts };
   });
 
+  // Weekly trend analysis
+  logger.debug('Setting up weekly trend analysis queue');
+  await boss.schedule('analyze-trends-weekly', '0 0 * * 0');
+  logger.debug('Setting up weekly trend analysis job');
   await boss.work('analyze-trends-weekly', async ([job]) => {
     logger.info(`Running weekly trend analysis job ${job.id}`);
     const weeklyTrends = await trendAnalyzer.getWeeklyTrends();
@@ -191,13 +200,10 @@ async function setupTrendAnalysisJobs() {
 async function setupEntrySummarizationJobs() {
   // Queue entries for summarization every 5 minutes
   logger.debug('Setting up entry summarization queue');
-  await boss.createQueue('queue-entries-for-summaries');
-  logger.debug('Setting up entry summarization job');
   await boss.schedule('queue-entries-for-summaries', `*/${SUMMARY_INTERVAL_MINUTES} * * * *`);
 
   // Summarize entries with rate limiting
   logger.debug('Setting up summarize entry job with rate limiting');
-  await boss.createQueue('summarize-entry');
 
   await boss.work('queue-entries-for-summaries', async ([job]) => {
     logger.info(`Running entry summarization queueing job ${job.id}`);
@@ -223,39 +229,38 @@ async function setupEntrySummarizationJobs() {
   });
 
   await boss.work<{ entryId: string, content: string }>('summarize-entry', { batchSize: SUMMARIZE_RATE_LIMIT }, async ([job]) => {
-    const { entryId, content } = job.data;
-    logger.info(`Processing summary for entry ${entryId}`);
-
-    // Check daily limit
-    if (dailyRequestCount >= REQUESTS_PER_DAY) {
-      logger.warn('Daily request limit reached. Skipping job.');
-      return { success: false, entryId, error: 'Daily request limit reached' };
-    }
-
-    // Check and reset per-minute token usage
-    const now = Date.now();
-    if (now - lastMinuteReset > 60000) {
-      tokenUsageLastMinute = 0;
-      lastMinuteReset = now;
-    }
-
-    // Estimate token usage
-    const estimatedTokens = content.split(/\s+/).length * 1.3;
-
-    if (tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
-      logger.warn('Token per minute limit reached. Failing job to retry later.');
-      return { success: false, entryId, error: 'Rate limit reached' };
-    }
-
     try {
+      const { entryId, content } = job.data;
+      logger.info(`Processing summary for entry ${entryId}`);
+
+      // Check daily limit
+      if (dailyRequestCount >= REQUESTS_PER_DAY) {
+        logger.warn('Daily request limit reached. Skipping job.');
+        return { success: false, entryId, error: 'Daily request limit reached' };
+      }
+
+      // Check and reset per-minute token usage
+      const now = Date.now();
+      if (now - lastMinuteReset > 60000) {
+        tokenUsageLastMinute = 0;
+        lastMinuteReset = now;
+      }
+
+      // Estimate token usage
+      const estimatedTokens = content.split(/\s+/).length * 1.3;
+
+      if (tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
+        logger.warn('Token per minute limit reached. Failing job to retry later.');
+        return { success: false, entryId, error: 'Rate limit reached' };
+      }
+
       dailyRequestCount++;
       tokenUsageLastMinute += estimatedTokens;
 
       const summaryResult = await processEntry(content);
-      console.debug('Summary result', summaryResult);
       if (summaryResult instanceof Error) {
         logger.error(`Error processing summary for entry ${entryId}:`, summaryResult);
-        return { success: false, entryId, error: summaryResult };
+        return { success: false, entryId, error: summaryResult.message };
       }
 
       // Update the entry in the database with the summary
@@ -271,8 +276,8 @@ async function setupEntrySummarizationJobs() {
       logger.info(`Completed summary for entry ${entryId}`);
       return { success: true, entryId, summarized: true };
     } catch (error) {
-      logger.error(`Error processing summary for entry ${entryId}:`, error);
-      return { success: false, entryId, error: error };
+      logger.error(`Unexpected error processing summary for entry ${job.data.entryId}:`, error);
+      return { success: false, entryId: job.data.entryId, error: 'Unexpected error occurred' };
     }
   });
 }
@@ -280,8 +285,6 @@ async function setupEntrySummarizationJobs() {
 async function setupMinifluxSync(intervalMinutes: number) {
   // Schedule the recurring sync job
   logger.debug('Setting up miniflux sync queue');
-  await boss.createQueue(SYNC_JOB_NAME);
-  logger.debug('Setting up miniflux sync job');
   await boss.schedule(SYNC_JOB_NAME, `*/${intervalMinutes} * * * *`);
 
   // Set up the work handler for the sync job
