@@ -214,9 +214,8 @@ async function setupEntrySummarizationJobs() {
 
     for (const entry of unprocessedEntries) {
       await boss.send('summarize-entry', { entryId: entry.id, content: entry.content }, {
-        singletonKey: `summarize-entry`,
-        singletonSeconds: 4, // 15 requests per minute max
-        singletonNextSlot: true,
+        singletonKey: `summarize-entry-${entry.id}`,
+        singletonSeconds: 60 * 60, // Prevent re-processing for 1 hour
         retryLimit: 3,
         retryDelay: SUMMARIZE_RATE_LIMIT_INTERVAL / SUMMARIZE_RATE_LIMIT,
         retryBackoff: true
@@ -228,9 +227,20 @@ async function setupEntrySummarizationJobs() {
   });
 
   await boss.work<{ entryId: string, content: string }>('summarize-entry', { batchSize: SUMMARIZE_RATE_LIMIT }, async ([job]) => {
+    const { entryId, content } = job.data;
+    logger.info(`Processing summary for entry ${entryId}`);
+
     try {
-      const { entryId, content } = job.data;
-      logger.info(`Processing summary for entry ${entryId}`);
+      // Check if the entry has already been processed
+      const existingEntry = await db.select({ processedForSummary: entries.processedForSummary })
+        .from(entries)
+        .where(eq(entries.id, entryId))
+        .limit(1);
+
+      if (existingEntry[0]?.processedForSummary) {
+        logger.info(`Entry ${entryId} has already been processed. Skipping.`);
+        return { success: true, entryId, alreadyProcessed: true };
+      }
 
       // Check daily limit
       if (dailyRequestCount >= REQUESTS_PER_DAY) {
@@ -275,8 +285,8 @@ async function setupEntrySummarizationJobs() {
       logger.info(`Completed summary for entry ${entryId}`);
       return { success: true, entryId, summarized: true };
     } catch (error) {
-      logger.error(`Unexpected error processing summary for entry ${job.data.entryId}:`, error);
-      return { success: false, entryId: job.data.entryId, error: 'Unexpected error occurred' };
+      logger.error(`Unexpected error processing summary for entry ${entryId}:`, error);
+      return { success: false, entryId, error: 'Unexpected error occurred' };
     }
   });
 }
@@ -291,12 +301,12 @@ async function setupMinifluxSync(intervalMinutes: number) {
     logger.info(`Starting Miniflux sync job ${job.id}`);
 
     try {
-      const { newFeeds, newEntries } = await fetchNewData(minifluxClient);
+      const { allFeeds, newEntries } = await fetchNewData();
 
-      logger.info(`Fetched ${newFeeds.length} new feeds and ${newEntries.length} new entries`);
+      logger.info(`Fetched ${allFeeds.length} new feeds and ${newEntries.length} new entries`);
 
       // Store new entries in the database first
-      const { entries } = await storeProcessedData(newFeeds, newEntries);
+      const { entries } = await storeProcessedData(allFeeds, newEntries);
 
       if (Array.isArray(entries)) {
         logger.info(`Queueing ${entries.length} entries for summarization`);
@@ -315,7 +325,7 @@ async function setupMinifluxSync(intervalMinutes: number) {
       }
 
       logger.info(`Miniflux sync job ${job.id} completed successfully`);
-      return { success: true, newFeedsCount: newFeeds.length, newEntriesCount: newEntries.length };
+      return { success: true, newFeedsCount: allFeeds.length, newEntriesCount: newEntries.length };
     } catch (error) {
       logger.error(`Error during Miniflux sync job ${job.id}`, { error });
       throw error; // This will mark the job as failed in pg-boss

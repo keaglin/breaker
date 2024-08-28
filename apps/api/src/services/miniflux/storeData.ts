@@ -22,11 +22,10 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
   const now = new Date();
   const storedFeeds: StoredFeed[] = [];
   const storedEntries: StoredEntry[] = [];
+  const feedIdMap = new Map<number, string>();
 
   await db.transaction(async (tx) => {
-    // Store feeds and keep a mapping of Miniflux feed IDs to our database feed IDs
-    const feedIdMap = new Map<number, string>();
-
+    // Store or update all feeds
     for (const feed of processedFeeds) {
       const result = await tx.insert(feeds).values({
         id: ulid(),
@@ -47,11 +46,12 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
         },
       }).returning({ id: feeds.id, minifluxId: feeds.minifluxId });
 
-      feedIdMap.set(result[0].minifluxId, result[0].id);
-      storedFeeds.push({ id: result[0].id, minifluxId: result[0].minifluxId });
+      const storedFeed = { id: result[0].id, minifluxId: result[0].minifluxId };
+      storedFeeds.push(storedFeed);
+      feedIdMap.set(storedFeed.minifluxId, storedFeed.id);
     }
 
-    // Store entries, using the feedIdMap to set the correct feedId
+    // Store new entries
     for (const entry of processedEntries) {
       const feedId = feedIdMap.get(entry.feed_id);
       if (!feedId) {
@@ -62,7 +62,7 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
       const result = await tx.insert(entries).values({
         id: ulid(),
         minifluxId: entry.id,
-        feedId: feedId,  // Use our database's feed ID, not Miniflux's
+        feedId: feedId,
         title: entry.title,
         url: entry.url,
         content: entry.content,
@@ -76,7 +76,7 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
       }).onConflictDoUpdate({
         target: entries.minifluxId,
         set: {
-          feedId: feedId,  // Update this as well in case the entry moved to a different feed
+          feedId: feedId,
           title: entry.title,
           url: entry.url,
           content: entry.content,

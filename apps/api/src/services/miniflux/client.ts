@@ -2,6 +2,62 @@ import axios, { type AxiosInstance, type AxiosError } from 'axios';
 import logger from '../../../../../packages/utils/src/logger';
 import invariant from 'tiny-invariant';
 
+// New interfaces based on the Miniflux API reference
+export interface MinifluxFeed {
+  id: number;
+  user_id: number;
+  title: string;
+  site_url: string;
+  feed_url: string;
+  checked_at: string;
+  etag_header: string;
+  last_modified_header: string;
+  parsing_error_message: string;
+  parsing_error_count: number;
+  scraper_rules: string;
+  rewrite_rules: string;
+  crawler: boolean;
+  blocklist_rules: string;
+  keeplist_rules: string;
+  user_agent: string;
+  username: string;
+  password: string;
+  disabled: boolean;
+  ignore_http_cache: boolean;
+  fetch_via_proxy: boolean;
+  category: MinifluxCategory;
+  icon: {
+    feed_id: number;
+    icon_id: number;
+  } | null;
+}
+
+export interface MinifluxEntry {
+  id: number;
+  user_id: number;
+  feed_id: number;
+  title: string;
+  url: string;
+  comments_url: string;
+  author: string;
+  content: string;
+  hash: string;
+  published_at: string;
+  created_at: string;
+  status: string;
+  share_code: string;
+  starred: boolean;
+  reading_time: number;
+  enclosures: any[] | null;
+  feed: MinifluxFeed;
+}
+
+export interface MinifluxCategory {
+  id: number;
+  user_id: number;
+  title: string;
+}
+
 export class MinifluxClient {
   private static instance: MinifluxClient;
   private apiClient: AxiosInstance;
@@ -93,13 +149,13 @@ export class MinifluxClient {
     }
   }
 
-  async getFeeds(afterId?: number) {
+  async getFeeds(afterId?: number): Promise<MinifluxFeed[]> {
     try {
-      const response = await this.apiClient.get('/v1/feeds');
+      const response = await this.apiClient.get<MinifluxFeed[]>('/v1/feeds');
       let feeds = response.data;
 
       if (afterId) {
-        feeds = feeds.filter((feed: any) => feed.id > afterId);
+        feeds = feeds.filter((feed) => feed.id > afterId);
       }
 
       return feeds;
@@ -117,18 +173,10 @@ export class MinifluxClient {
     after_entry_id?: number;
     order?: 'id' | 'status' | 'published_at';
     direction?: 'asc' | 'desc';
-  }) {
+  }): Promise<MinifluxEntry[]> {
     try {
-      console.debug(`getEntries params`, params);
-      const url = new URL(`${this.apiClient.defaults.baseURL}/v1/entries`);
-      Object.entries(params).forEach(([key, value]) => {
-        url.searchParams.append(key, value.toString());
-      });
-      console.debug(`Fetching entries from Miniflux`, { fullUrl: url.toString() });
-      const response = await this.apiClient.get('/v1/entries', { params });
-      console.debug('response keys', Object.keys(response.data));
-      // console.debug(`Received entries from Miniflux`, { total: response.data.total, entries: response.data.entries });
-      return response.data.entries; // Return the 'entries' array from the response
+      const response = await this.apiClient.get<{ entries: MinifluxEntry[] }>('/v1/entries', { params });
+      return response.data.entries;
     } catch (error) {
       logger.error('Failed to get entries from Miniflux', { error, params });
       throw error;
