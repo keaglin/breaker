@@ -1,7 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import invariant from 'tiny-invariant';
 import { summarizePrompt } from './summarizePrompt';
-import PgBoss from 'pg-boss';
 import logger from '@/packages/utils/src/logger';
 
 invariant(process.env.GOOGLE_AI_API_KEY, 'GOOGLE_AI_API_KEY is not set');
@@ -21,15 +20,26 @@ const model = genAI.getGenerativeModel({
   generationConfig: { responseMimeType: 'application/json' },
 });
 
+interface SummaryResult {
+  summary: string;
+  keypoints: string[];
+  takeaways: string[];
+}
 
-export async function processEntry(entryId: string, content: string) {
+export async function processEntry(content: string): Promise<SummaryResult | Error> {
   const prompt = `${summarizePrompt}\n\n${content}`;
 
   const result = await model.generateContent(prompt);
-  const summary = result.response.text();
+  // logger.debug('Raw summary result', result);
 
-  // Update the entry in the database with the summary
-  // await updateEntryWithSummary(entryId, summary);
+  const rawSummary = result.response.candidates?.[0]?.content?.parts?.[0]?.text;
 
-  return summary;
+  try {
+    const parsedSummary: SummaryResult = JSON.parse(rawSummary ?? '');
+    return parsedSummary;
+  } catch (error) {
+    logger.error(`Error parsing summary:`, error);
+    // throw new Error(`Failed to parse summary: ${error}`);
+    return error as Error;
+  }
 }

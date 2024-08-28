@@ -18,7 +18,7 @@ export class TrendAnalyzer {
     this.sink.start({ highWaterMark: 1024 * 1024, stream: true }); // 1MB buffer
   }
 
-  async processBatch(startId: number, endId: number) {
+  async processBatch(startId: string, endId: string) {
     const batchEntries = await this.db.select()
       .from(entries)
       .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId} AND ${entries.processedForTrends} = false`)
@@ -108,7 +108,7 @@ export class TrendAnalyzer {
     return trends;
   }
 
-  private async markEntriesAsProcessed(startId: number, endId: number) {
+  private async markEntriesAsProcessed(startId: string, endId: string) {
     await this.db.update(entries)
       .set({ processedForTrends: true })
       .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId}`);

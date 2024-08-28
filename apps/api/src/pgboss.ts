@@ -17,7 +17,7 @@ invariant(process.env.MINIFLUX_API_KEY, 'MINIFLUX_API_KEY is not set');
 invariant(process.env.MINIFLUX_API_URL, 'MINIFLUX_API_URL is not set');
 
 const SYNC_JOB_NAME = 'miniflux-sync';
-const SUMMARIZE_ENTRY_JOB_NAME = 'summarize-entry'; // This should match the name in your existing setup
+const SUMMARIZE_ENTRY_JOB_NAME = 'summarize-entry';
 
 let boss: PgBoss;
 const trendAnalyzer = new TrendAnalyzer();
@@ -28,10 +28,10 @@ const SUMMARY_INTERVAL_MINUTES = 5;
 const pgbossConfig = {
   connectionString: process.env.DATABASE_URL as string,
   // ULID configuration
-  // uuid: () => ulid(),
-  // helloPubsub: {
-  //   idColumnType: 'text'
-  // },
+  uuid: () => ulid(),
+  helloPubsub: {
+    idColumnType: 'text'
+  },
 
   // Queue options
   archiveCompletedAfterSeconds: 60 * 60 * 24, // 1 day
@@ -118,7 +118,7 @@ async function setupTrendAnalysisJobs() {
   logger.debug('Setting up weekly trend analysis job');
   await boss.schedule('analyze-trends-weekly', '0 0 * * 0');
 
-  await boss.work('analyze-trends-hourly', async (job) => {
+  await boss.work('analyze-trends-hourly', async ([job]) => {
     logger.info(`Running hourly trend processing job ${job.id}`);
     const unprocessedEntries = await db.select({ id: entries.id })
       .from(entries)
@@ -135,7 +135,7 @@ async function setupTrendAnalysisJobs() {
     return { success: true, processedCount: unprocessedEntries.length };
   });
 
-  await boss.work('process-entry-batch-for-trends', async (job) => {
+  await boss.work<{ startId: string, endId: string }>('analyze-trends-hourly', async ([job]) => {
     const { startId, endId } = job.data;
     logger.info(`Processing trend batch job ${job.id} for entries ${startId} to ${endId}`);
 
@@ -145,7 +145,7 @@ async function setupTrendAnalysisJobs() {
     return { success: true };
   });
 
-  await boss.work('analyze-trends-daily', async (job) => {
+  await boss.work('analyze-trends-daily', async ([job]) => {
     logger.info(`Running daily trend analysis job ${job.id}`);
     const recentTrends = await trendAnalyzer.getDailyTrends();
     const bursts = await trendAnalyzer.detectBursts();
@@ -153,7 +153,7 @@ async function setupTrendAnalysisJobs() {
     return { success: true, recentTrends, bursts };
   });
 
-  await boss.work('analyze-trends-weekly', async (job) => {
+  await boss.work('analyze-trends-weekly', async ([job]) => {
     logger.info(`Running weekly trend analysis job ${job.id}`);
     const weeklyTrends = await trendAnalyzer.getWeeklyTrends();
     logger.info(`Completed weekly trend analysis job ${job.id}`);
@@ -172,7 +172,7 @@ async function setupEntrySummarizationJobs() {
   logger.debug('Setting up summarize entry job');
   await boss.createQueue('summarize-entry');
 
-  await boss.work('queue-entries-for-summaries', async (job) => {
+  await boss.work('queue-entries-for-summaries', async ([job]) => {
     logger.info(`Running entry summarization queueing job ${job.id}`);
     const unprocessedEntries = await db.select({ id: entries.id, content: entries.content })
       .from(entries)
@@ -188,18 +188,33 @@ async function setupEntrySummarizationJobs() {
     return { success: true, queuedCount: unprocessedEntries.length };
   });
 
-  await boss.work('summarize-entry', async (job) => {
+  await boss.work<{ entryId: string, content: string }>('summarize-entry', async ([job]) => {
     const { entryId, content } = job.data;
     logger.info(`Processing summary for entry ${entryId}`);
 
-    const summary = await processEntry(entryId, content);
+    try {
+      const summaryResult = await processEntry(content);
+      if (summaryResult instanceof Error) {
+        logger.error(`Error processing summary for entry ${entryId}:`, summaryResult);
+        return { success: false, entryId, error: summaryResult };
+      }
 
-    await db.update(entries)
-      .set({ summary, processedForSummary: true })
-      .where(eq(entries.id, entryId));
+      // Update the entry in the database with the summary
+      await db.update(entries)
+        .set({
+          summary: summaryResult.summary,
+          keypoints: summaryResult.keypoints,
+          takeaways: summaryResult.takeaways,
+          processedForSummary: true
+        })
+        .where(eq(entries.id, entryId));
 
-    logger.info(`Completed summary for entry ${entryId}`);
-    return { success: true, entryId, summarized: true };
+      logger.info(`Completed summary for entry ${entryId}`);
+      return { success: true, entryId, summarized: true };
+    } catch (error) {
+      logger.error(`Error processing summary for entry ${entryId}:`, error);
+      return { success: false, entryId, error: error };
+    }
   });
 }
 
@@ -211,7 +226,7 @@ async function setupMinifluxSync(intervalMinutes: number) {
   await boss.schedule(SYNC_JOB_NAME, `*/${intervalMinutes} * * * *`);
 
   // Set up the work handler for the sync job
-  await boss.work(SYNC_JOB_NAME, async (job) => {
+  await boss.work(SYNC_JOB_NAME, async ([job]) => {
     logger.info(`Starting Miniflux sync job ${job.id}`);
 
     const minifluxClient = new MinifluxClient(
