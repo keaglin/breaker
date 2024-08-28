@@ -9,7 +9,7 @@ import { ulid } from 'ulid';
 import { initializeMinifluxSync } from './services/miniflux/sync';
 import { minifluxClient, MinifluxClient } from './services/miniflux/client';
 import { fetchNewData } from './services/miniflux/fetcher';
-import { storeProcessedData } from './services/miniflux/storeData';
+import { storeProcessedData, type StoredEntry } from './services/miniflux/storeData';
 import invariant from 'tiny-invariant';
 
 
@@ -72,7 +72,10 @@ export async function initializePgBoss() {
     boss = new PgBoss(pgbossConfig);
 
     boss.on('error', error => logger.error('PgBoss error:', error));
-    boss.on('wip', (job: any) => logger.info(`Job in progress: ${job.id}`));
+    boss.on('wip', ([job]) => logger.info(`Job in progress: ${job.id}`));
+    boss.on('monitor-states', (monitorStates) => {
+      logger.info('PgBoss monitor states:', JSON.stringify(monitorStates, null, 2));
+    });
     boss.on('stopped', () => logger.info('PgBoss stopped'));
 
 
@@ -220,7 +223,7 @@ async function setupEntrySummarizationJobs() {
 
 async function setupMinifluxSync(intervalMinutes: number) {
   // Schedule the recurring sync job
-  logger.debug('Settting up miniflux sync queue');
+  logger.debug('Setting up miniflux sync queue');
   await boss.createQueue(SYNC_JOB_NAME);
   logger.debug('Setting up miniflux sync job');
   await boss.schedule(SYNC_JOB_NAME, `*/${intervalMinutes} * * * *`);
@@ -234,23 +237,24 @@ async function setupMinifluxSync(intervalMinutes: number) {
 
       logger.info(`Fetched ${newFeeds.length} new feeds and ${newEntries.length} new entries`);
 
-      if (Array.isArray(newEntries)) {
-        logger.info(`Queueing ${newEntries.length} entries for summarization`);
-        for (const entry of newEntries) {
+      // Store new entries in the database first
+      const { entries } = await storeProcessedData(newFeeds, newEntries);
+
+      if (Array.isArray(entries)) {
+        logger.info(`Queueing ${entries.length} entries for summarization`);
+        for (const entry of entries) {
           const id = await boss.send({
             name: SUMMARIZE_ENTRY_JOB_NAME,
             data: {
-              entryId: entry.id.toString(),
+              entryId: entry.id, // This is now the database ULID
               content: entry.content
             }
           });
-          logger.debug(`Queued entry for summarization: ${entry.id} with id ${id}`);
+          logger.debug(`Queued entry for summarization: ${entry.id} with job id ${id}`);
         }
       } else {
-        logger.warn(`newEntries is not an array`, typeof newEntries);
+        logger.warn(`entries is not an array`, typeof entries);
       }
-
-      await storeProcessedData(newFeeds, newEntries);
 
       logger.info(`Miniflux sync job ${job.id} completed successfully`);
       return { success: true, newFeedsCount: newFeeds.length, newEntriesCount: newEntries.length };

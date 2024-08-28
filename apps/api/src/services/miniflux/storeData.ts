@@ -4,8 +4,24 @@ import { feeds, entries } from '../../db/schema';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
 
-export async function storeProcessedData(processedFeeds: any[], processedEntries: any[]) {
+interface StoredFeed {
+  id: string;
+  minifluxId: number;
+}
+
+export interface StoredEntry {
+  id: string;
+  minifluxId: number;
+  content: string | null;
+}
+
+export async function storeProcessedData(processedFeeds: any[], processedEntries: any[]): Promise<{
+  feeds: StoredFeed[];
+  entries: StoredEntry[];
+}> {
   const now = new Date();
+  const storedFeeds: StoredFeed[] = [];
+  const storedEntries: StoredEntry[] = [];
 
   await db.transaction(async (tx) => {
     // Store feeds and keep a mapping of Miniflux feed IDs to our database feed IDs
@@ -32,6 +48,7 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
       }).returning({ id: feeds.id, minifluxId: feeds.minifluxId });
 
       feedIdMap.set(result[0].minifluxId, result[0].id);
+      storedFeeds.push({ id: result[0].id, minifluxId: result[0].minifluxId });
     }
 
     // Store entries, using the feedIdMap to set the correct feedId
@@ -42,7 +59,7 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
         continue;
       }
 
-      await tx.insert(entries).values({
+      const result = await tx.insert(entries).values({
         id: ulid(),
         minifluxId: entry.id,
         feedId: feedId,  // Use our database's feed ID, not Miniflux's
@@ -71,7 +88,15 @@ export async function storeProcessedData(processedFeeds: any[], processedEntries
           keypoints: entry.keypoints,
           updatedAt: now,
         },
+      }).returning({ id: entries.id, minifluxId: entries.minifluxId, content: entries.content });
+
+      storedEntries.push({
+        id: result[0].id,
+        minifluxId: result[0].minifluxId,
+        content: result[0].content
       });
     }
   });
+
+  return { feeds: storedFeeds, entries: storedEntries };
 }
