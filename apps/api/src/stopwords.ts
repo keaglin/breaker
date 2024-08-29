@@ -4,7 +4,11 @@ const htmlStopwords = new Set([
   'strong', 'em', 'a', 'href', 'img', 'src', 'alt', 'p', 'div', 'span',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'br', 'table', 'tr', 'td', 'th',
   'target', '_blank', 'www', 's', 'rel', 'noopener', 'noreferrer', 'referrer', 'referrerpolicy',
-  'com', 'https', 'figcaption'
+  'com', 'https', 'figcaption', 'wp', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'gif', 'bmp', 'tiff',
+  'ico', 'cur', 'ani', 'mov', 'mp4', 'webm', 'ogv', 'flv', 'avi', 'mkv', 'wmv', 'mpg', 'mpeg',
+  'm4v', '3gp', '3g2', 'm2ts', 'mts', 'm2v', 'm4v', 'mp2', 'mp3', 'mpa', 'mpe', 'mpeg', 'mpg',
+  'mpv', 'mxf', 'nsv', 'ogm', 'ogv', 'qt', 'rm', 'rmvb', 'swf', 'vob', 'webm', 'wmv', 'xvid',
+  'yuv', 'z', 'srcset', 'html', 'amp', 'http', 'ssl'
 ]);
 
 const timeStopwords = new Set([
@@ -13,7 +17,16 @@ const timeStopwords = new Set([
   ...Array.from({ length: 2100 - 1900 }, (_, i) => (1900 + i).toString()) // Years from 1900 to 2100
 ]);
 
-const numbers = Array.from({ length: 100 }, (_, i) => i.toString());
+// 00 to 2000
+const numbersWithLeadingZero = Array.from({ length: 2000 }, (_, i) => i.toString()).flatMap(num => [num, num.padStart(2, '0')]);
+const numbersWithLeadingZeros = Array.from({ length: 2000 }, (_, i) => i.toString()).flatMap(num => [num, num.padStart(1, '0')]);
+const numbers = Array.from({ length: 2000 }, (_, i) => i.toString());
+
+// any string ending in 'w' or 'px' or 'vw' or 'vh'
+const numbersEndingInW = numbers.map(num => `${num}w`);
+const numbersEndingInPx = numbers.map(num => `${num}px`);
+const numbersEndingInVw = numbers.map(num => `${num}vw`);
+const numbersEndingInVh = numbers.map(num => `${num}vh`);
 
 const publicationStopwords = new Set([
   // Add your publication names here
@@ -22,6 +35,12 @@ const publicationStopwords = new Set([
 
 export const stopwordList = new Set([
   ...numbers,
+  ...numbersWithLeadingZero,
+  ...numbersWithLeadingZeros,
+  ...numbersEndingInW,
+  ...numbersEndingInPx,
+  ...numbersEndingInVw,
+  ...numbersEndingInVh,
   ...englishStopwords,
   ...htmlStopwords,
   ...timeStopwords,

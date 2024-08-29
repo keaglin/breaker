@@ -7,6 +7,8 @@ import logger from '@/packages/utils/src/logger';
 import type { ArrayBufferSink } from 'bun';
 // import { customStopwords, addCustomStopword, removeCustomStopword } from './custom-stopwords';
 import { stopwordList } from './stopwords';
+// @ts-expect-error: no types
+import { JSDOM } from 'jsdom';
 
 /**
  * TrendAnalyzer class for processing and analyzing trends from entry data.
@@ -67,7 +69,7 @@ export class TrendAnalyzer {
         const batch = await this.db.select().from(hourlyBatches).where(eq(hourlyBatches.id, batchId)).limit(1);
         if (batch.length > 0) {
           await this.saveTrends(batch[0].batchHour);
-          logger.info(`Saved trends for batch ${batchId}`);
+          logger.info(`Saved trends for batch ${batchId} (${batch[0].batchHour.toISOString()})`);
         } else {
           logger.warn(`Batch ${batchId} not found when saving trends`);
         }
@@ -86,8 +88,21 @@ export class TrendAnalyzer {
     return words.filter(word => !stopwordList.has(word) && Boolean(word));
   }
 
+  private extractTextFromHtml(html: string): string {
+    const dom = new JSDOM(html);
+    const document = dom.window.document;
+    // Remove script and style elements
+    document.querySelectorAll('script, style').forEach((el: Element) => el.remove());
+
+    // Get the text content
+    return document.body.textContent || '';
+  }
+
   private async analyzeEntry(entry: { id: string, content: string }) {
-    const originalWords = entry.content.toLowerCase().split(/\W+/);
+    // Extract plain text from HTML content
+    const plainText = this.extractTextFromHtml(entry.content);
+
+    const originalWords = plainText.toLowerCase().split(/\W+/);
     const words = this.filterStopwords(originalWords);
 
     logger.debug(`Original word count: ${originalWords.length}`);
@@ -103,14 +118,18 @@ export class TrendAnalyzer {
   }
 
   private async saveTrends(batchHour: Date) {
-    const now = new Date();
+    // Use batchHour instead of current time
+    logger.debug(`Saving trends for batch hour: ${batchHour.toISOString()}`);
+
     const trendEntries = Array.from(this.trendCounts.entries())
+      .filter(([keyword]) => !stopwordList.has(keyword.toLowerCase()))
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 100); // Top 100 trends
+      .slice(0, 100);
 
     logger.debug(`Saving ${trendEntries.length} trends`);
     logger.debug(`Sample trends: ${JSON.stringify(trendEntries.slice(0, 5))}`);
 
+    this.sink.flush();
     for (const [keyword, frequency] of trendEntries) {
       const trendBuffer = this.trendToBuffer(keyword, frequency);
       this.sink.write(trendBuffer);
@@ -122,19 +141,19 @@ export class TrendAnalyzer {
     await this.db.transaction(async (tx) => {
       for (const trend of trendsFromBuffer) {
         await tx.insert(trends).values({
-          time: now,
+          time: batchHour, // Use batchHour here
           keyword: trend.keyword,
           trendType: 'keyword_frequency',
           frequency: trend.frequency,
           data: JSON.stringify(trend)
         }).onConflictDoUpdate({
           target: [trends.time, trends.keyword],
-          set: { frequency: sql`${trends.frequency} + ${trend.frequency}` }
+          set: { frequency: sql`${trends.frequency} + EXCLUDED.frequency` }
         });
       }
     });
 
-    logger.info(`Saved ${trendsFromBuffer.length} trends at ${now}`);
+    logger.info(`Saved ${trendsFromBuffer.length} trends for batch hour ${batchHour.toISOString()}`);
     logger.debug(`Trends saved: ${JSON.stringify(trendsFromBuffer.slice(0, 5))}`);
     this.trendCounts.clear();
   }
