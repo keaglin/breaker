@@ -193,31 +193,33 @@ async function setupTrendAnalysisJobs() {
     return { success: true, batchId, entriesProcessed: entryIds.length };
   });
 
-  // Daily trend analysis
-  await boss.schedule('queue-trend-analysis-daily', '0 0 * * *');
+  // Deprecating in favor of querying trends from the hourly batches
+  // See getWeeklyTrends() and getDailyTrends() in trend-analyzer.ts
+  // // Daily trend analysis
+  // await boss.schedule('queue-trend-analysis-daily', '0 0 * * *');
 
-  await boss.work('queue-trend-analysis-daily', async () => {
-    const now = new Date();
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    for (let hour = 0; hour < 24; hour++) {
-      const batchHour = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), hour);
-      await queueBatchForAnalysis(batchHour);
-    }
-  });
+  // await boss.work('queue-trend-analysis-daily', async () => {
+  //   const now = new Date();
+  //   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  //   for (let hour = 0; hour < 24; hour++) {
+  //     const batchHour = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), hour);
+  //     await queueBatchForAnalysis(batchHour);
+  //   }
+  // });
 
-  // Weekly trend analysis
-  await boss.schedule('queue-trend-analysis-weekly', '0 0 * * 0');
+  // // Weekly trend analysis
+  // await boss.schedule('queue-trend-analysis-weekly', '0 0 * * 0');
 
-  await boss.work('queue-trend-analysis-weekly', async () => {
-    const now = new Date();
-    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    for (let d = new Date(oneWeekAgo); d < now; d.setDate(d.getDate() + 1)) {
-      for (let hour = 0; hour < 24; hour++) {
-        const batchHour = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour);
-        await queueBatchForAnalysis(batchHour);
-      }
-    }
-  });
+  // await boss.work('queue-trend-analysis-weekly', async () => {
+  //   const now = new Date();
+  //   const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  //   for (let d = new Date(oneWeekAgo); d < now; d.setDate(d.getDate() + 1)) {
+  //     for (let hour = 0; hour < 24; hour++) {
+  //       const batchHour = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour);
+  //       await queueBatchForAnalysis(batchHour);
+  //     }
+  //   }
+  // });
 }
 
 async function setupEntrySummarizationJobs() {
