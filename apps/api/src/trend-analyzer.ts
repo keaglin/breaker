@@ -1,5 +1,5 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { eq, desc, sql, and, gte, lt, inArray } from 'drizzle-orm';
+import { eq, desc, sql, and, gte, lt, inArray, lte } from 'drizzle-orm';
 import { removeStopwords } from 'stopword';
 import { trends, entries, hourlyBatches } from './db/schema';
 import { db } from './db';
@@ -195,19 +195,30 @@ export class TrendAnalyzer {
       .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId}`);
   }
 
-  async getDailyTrends() {
+  async getDailyTrends(startDate: Date) {
+    // Ensure startDate is set to the beginning of the day
+    const dayStart = new Date(startDate);
+    dayStart.setHours(0, 0, 0, 0);
+
+    // Set endDate to the last millisecond of the same day
+    const dayEnd = new Date(dayStart);
+    dayEnd.setHours(23, 59, 59, 999);
+
     return this.db.select({
       keyword: trends.keyword,
       totalFrequency: sql`sum(${trends.frequency})`.as('total_frequency')
     })
       .from(trends)
-      .where(sql`${trends.time} > NOW() - INTERVAL '1 day'`)
+      .where(and(
+        gte(trends.time, dayStart),
+        lte(trends.time, dayEnd)
+      ))
       .groupBy(trends.keyword)
       .orderBy(desc(sql`total_frequency`))
       .limit(10);
   }
 
-  async getWeeklyTrends() {
+  async getWeeklyTrends(startDate: Date, endDate: Date) {
     return this.db.select({
       keyword: trends.keyword,
       totalFrequency: sql<number>`sum(${trends.frequency})`.as('total_frequency'),
@@ -215,7 +226,10 @@ export class TrendAnalyzer {
       distinctDays: sql<number>`count(distinct date_trunc('day', ${trends.time}))`.as('distinct_days')
     })
       .from(trends)
-      .where(sql`${trends.time} > NOW() - INTERVAL '7 days'`)
+      .where(and(
+        gte(trends.time, startDate),
+        lt(trends.time, endDate)
+      ))
       .groupBy(trends.keyword)
       .having(sql`count(distinct date_trunc('day', ${trends.time})) >= 3`) // Trend appeared in at least 3 distinct days
       .orderBy(desc(sql`total_frequency`))
