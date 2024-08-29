@@ -1,0 +1,1 @@
+ALTER TABLE "hourly_batches" ALTER COLUMN "processed_at" SET DATA TYPE timestamp with time zone;

@@ -1,15 +1,5 @@
 import { pgTable, text, timestamp, integer, boolean, real, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 
-// Sync metadata table
-export const syncMetadata = pgTable('sync_metadata', {
-  id: text('id').primaryKey(),
-  entity: text('entity').notNull(),
-  lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
-  lastSyncedId: integer('last_synced_id'),
-  success: boolean('success').notNull(),
-  errorMessage: text('error_message'),
-});
-
 export const feeds = pgTable('feeds', {
   id: text('id').primaryKey(),
   minifluxId: integer('miniflux_id').notNull().unique(),
@@ -52,4 +42,12 @@ export const trends = pgTable('trends', {
   return {
     pk: primaryKey({ columns: [table.time, table.keyword] }),
   };
+});
+
+export const hourlyBatches = pgTable('hourly_batches', {
+  id: text('id').primaryKey(),
+  batchHour: timestamp('batch_hour').notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+  entryCount: integer('entry_count').notNull(),
+  isProcessed: boolean('is_processed').notNull().default(false),
 });

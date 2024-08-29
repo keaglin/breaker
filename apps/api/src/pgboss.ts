@@ -1,10 +1,10 @@
 import PgBoss from 'pg-boss';
 import logger from '@/packages/utils/src/logger';
-import { TrendAnalyzer } from './trend-analyzer';
+import { trendAnalyzer } from './trend-analyzer';
 import { processEntry } from './entry-processor';
 import { db } from './db';
-import { entries } from './db/schema';
-import { eq, and, gte, lt } from 'drizzle-orm';
+import { entries, hourlyBatches } from './db/schema';
+import { eq, and, gte, lt, desc, sql, min, max, inArray, asc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { fetchNewData } from './services/miniflux/fetcher';
 import { storeProcessedData, type StoredEntry } from './services/miniflux/storeData';
@@ -16,9 +16,8 @@ invariant(process.env.MINIFLUX_API_URL, 'MINIFLUX_API_URL is not set');
 
 const SYNC_JOB_NAME = 'miniflux-sync';
 const SUMMARIZE_ENTRY_JOB_NAME = 'summarize-entry';
-
+const ANALYZE_BATCH_JOB = 'analyze-batch-trends';
 let boss: PgBoss;
-const trendAnalyzer = new TrendAnalyzer();
 
 const SUMMARY_BATCH_SIZE = 10;
 const SUMMARY_INTERVAL_MINUTES = 5;
@@ -93,7 +92,23 @@ export async function initializePgBoss() {
     boss = new PgBoss(pgbossConfig);
 
     boss.on('error', error => logger.error('PgBoss error:', error));
-    boss.on('wip', ([job]) => logger.info(`Job in progress: ${job.id}`));
+    boss.on('wip', ([job]) => {
+      const jobInfo = {
+        id: job.id,
+        name: job.name,
+        options: job.options,
+        state: job.state,
+        count: job.count,
+        createdOn: job.createdOn,
+        lastFetchedOn: job.lastFetchedOn,
+        lastJobStartedOn: job.lastJobStartedOn,
+        lastJobEndedOn: job.lastJobEndedOn,
+        lastJobDuration: job.lastJobDuration,
+        lastError: job.lastError,
+        lastErrorOn: job.lastErrorOn
+      };
+      console.debug(`Job in progress for worker ${job.name} (${job.id}):`, JSON.stringify(jobInfo, null, 2));
+    });
     boss.on('monitor-states', (monitorStates) => {
       logger.info('PgBoss monitor states:', JSON.stringify(monitorStates, null, 2));
     });
@@ -104,6 +119,7 @@ export async function initializePgBoss() {
 
     await initializeQueues();
     logger.info('All job handlers set up');
+    logger.info('Backfill initialized');
 
   } catch (error) {
     logger.error('Error initializing PgBoss:', error);
@@ -113,12 +129,14 @@ export async function initializePgBoss() {
 
 async function initializeQueues() {
   const requiredQueues = [
-    'analyze-trends-hourly',
-    'analyze-trends-daily',
-    'analyze-trends-weekly',
+    'queue-trend-analysis-hourly',
+    'queue-trend-analysis-daily',
+    'queue-trend-analysis-weekly',
     'queue-entries-for-summaries',
     'summarize-entry',
-    SYNC_JOB_NAME
+    SYNC_JOB_NAME,
+    'identify-backfill-batches',
+    ANALYZE_BATCH_JOB
   ];
 
   const existingQueues = await boss.getQueues();
@@ -136,68 +154,70 @@ async function initializeQueues() {
 
   await setupTrendAnalysisJobs();
   await setupEntrySummarizationJobs();
-  await setupMinifluxSync(MINIFLUX_SYNC_INTERVAL_MINUTES);
+  await setupMinifluxSync(MINIFLUX_SYNC_INTERVAL_MINUTES)
+  await setupBackfillJobs();
+  await initializeBackfill();
 }
 
 async function setupTrendAnalysisJobs() {
   // Hourly trend processing
-  logger.debug('Setting up trend analysis queue');
-  await boss.schedule('analyze-trends-hourly', '0 * * * *');
+  await boss.schedule('queue-trend-analysis-hourly', '0 * * * *');
 
-  logger.debug('Setting up trend analysis jobs');
-  await boss.work('analyze-trends-hourly', async ([job]) => {
-    logger.info(`Running hourly trend processing job ${job.id}`);
+  await boss.work('queue-trend-analysis-hourly', async () => {
+    const [latestBatch] = await db.select()
+      .from(hourlyBatches)
+      .orderBy(desc(hourlyBatches.batchHour))
+      .limit(1);
 
-    const now = new Date();
-    const batchHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() - 1, 0, 0, 0);
-    const batchHourEnd = new Date(batchHourStart.getTime() + 60 * 60 * 1000);
+    if (latestBatch) {
+      const batchHour = new Date(latestBatch.batchHour);
+      const nextBatchHour = new Date(batchHour.getTime() + 60 * 60 * 1000);
 
-    const batchEntries = await db.select({ id: entries.id, content: entries.content })
-      .from(entries)
-      .where(
-        and(
-          gte(entries.createdAt, batchHourStart),
-          lt(entries.createdAt, batchHourEnd)
-        )
-      )
-      .orderBy(entries.id);
-
-    const validBatchEntries = batchEntries.filter((entry): entry is { id: string; content: string } => entry.content !== null);
-
-    if (validBatchEntries.length > 0) {
-      logger.debug(`Processing ${validBatchEntries.length} entries for hour ${batchHourStart.toISOString()}`);
-      await trendAnalyzer.processBatch(validBatchEntries, batchHourStart);
+      await queueBatchForAnalysis(nextBatchHour);
     }
+  });
 
-    logger.info(`Completed hourly trend processing job ${job.id}`);
-    return { success: true, processedCount: batchEntries.length, batchHour: batchHourStart.toISOString() };
+  // Set up the work handler for batch analysis
+  await boss.work<{ batchId: string, entryIds: string[] }>(ANALYZE_BATCH_JOB, async ([job]) => {
+    const { batchId, entryIds } = job.data;
+    await trendAnalyzer.processBatch(batchId, entryIds);
+
+    // Update batch as processed
+    await db.update(hourlyBatches)
+      .set({
+        isProcessed: true,
+        processedAt: new Date()
+      })
+      .where(eq(hourlyBatches.id, batchId));
+
+    return { success: true, batchId, entriesProcessed: entryIds.length };
   });
 
   // Daily trend analysis
-  logger.debug('Setting up daily trend analysis queue');
-  await boss.schedule('analyze-trends-daily', '0 0 * * *');
-  logger.debug('Setting up daily trend analysis job');
-  await boss.work('analyze-trends-daily', async ([job]) => {
-    logger.info(`Running daily trend analysis job ${job.id}`);
-    const recentTrends = await trendAnalyzer.getDailyTrends();
-    const bursts = await trendAnalyzer.detectBursts();
-    logger.info(`Completed daily trend analysis job ${job.id}`);
-    return { success: true, recentTrends, bursts };
+  await boss.schedule('queue-trend-analysis-daily', '0 0 * * *');
+
+  await boss.work('queue-trend-analysis-daily', async () => {
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    for (let hour = 0; hour < 24; hour++) {
+      const batchHour = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), hour);
+      await queueBatchForAnalysis(batchHour);
+    }
   });
 
   // Weekly trend analysis
-  logger.debug('Setting up weekly trend analysis queue');
-  await boss.schedule('analyze-trends-weekly', '0 0 * * 0');
-  logger.debug('Setting up weekly trend analysis job');
-  await boss.work('analyze-trends-weekly', async ([job]) => {
-    logger.info(`Running weekly trend analysis job ${job.id}`);
-    const weeklyTrends = await trendAnalyzer.getWeeklyTrends();
-    logger.info(`Completed weekly trend analysis job ${job.id}`);
-    return { success: true, weeklyTrends };
-  });
+  await boss.schedule('queue-trend-analysis-weekly', '0 0 * * 0');
 
-  // Optionally, run an initial analysis immediately
-  await boss.send({ name: 'analyze-trends-hourly' });
+  await boss.work('queue-trend-analysis-weekly', async () => {
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    for (let d = new Date(oneWeekAgo); d < now; d.setDate(d.getDate() + 1)) {
+      for (let hour = 0; hour < 24; hour++) {
+        const batchHour = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour);
+        await queueBatchForAnalysis(batchHour);
+      }
+    }
+  });
 }
 
 async function setupEntrySummarizationJobs() {
@@ -219,7 +239,7 @@ async function setupEntrySummarizationJobs() {
     for (const entry of unprocessedEntries) {
       await boss.send('summarize-entry', { entryId: entry.id, content: entry.content }, {
         singletonKey: `summarize-entry-${entry.id}`,
-        singletonSeconds: 60 * 60, // Prevent re-processing for 1 hour
+        singletonHours: 12,
         retryLimit: 3,
         retryDelay: SUMMARIZE_RATE_LIMIT_INTERVAL / SUMMARIZE_RATE_LIMIT,
         retryBackoff: true
@@ -341,6 +361,187 @@ async function setupMinifluxSync(intervalMinutes: number) {
   // Optionally, run an initial sync immediately
   await boss.send({ name: SYNC_JOB_NAME });
 }
+
+async function setupBackfillJobs() {
+  logger.debug('Setting up backfill jobs');
+
+  // Job to identify and create batches
+  await boss.work<{ startDate: string, endDate: string }>('identify-backfill-batches', async ([job]) => {
+    const { startDate, endDate } = job.data;
+    logger.info(`Identifying backfill batches from ${startDate} to ${endDate}`);
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    // Group entries by hour directly in the database query
+    const entriesByHour = await db
+      .select({
+        hourKey: sql<string>`date_trunc('hour', ${entries.publishedAt})::text`,
+        entryIds: sql<string[]>`array_agg(${entries.id})`
+      })
+      .from(entries)
+      .where(
+        and(
+          gte(entries.publishedAt, start),
+          lt(entries.publishedAt, end)
+        )
+      )
+      .groupBy(sql`date_trunc('hour', ${entries.publishedAt})`)
+      .orderBy(sql`date_trunc('hour', ${entries.publishedAt})`);
+
+    console.debug(`Entries by hour: ${JSON.stringify(entriesByHour[0], null, 2)}`);
+
+    // Create batches and queue processing jobs
+    for (const { hourKey, entryIds } of entriesByHour) {
+      console.debug(`Processing hour ${hourKey} with ${entryIds.length} entries`);
+      // Convert hourKey to Date object
+      const batchHour = new Date(hourKey);
+
+      console.debug(`hourlyBatches.batchHour type: ${typeof hourlyBatches.batchHour}`);
+      console.debug(`hourKey type: ${typeof hourKey}`);
+      // If there are entries in the hour, we need to process the batch
+      if (entryIds.length > 0) {
+        // Check if batch already exists
+        const existingBatch = await db.select()
+          .from(hourlyBatches)
+          .where(eq(hourlyBatches.batchHour, batchHour))
+          .limit(1);
+
+        console.debug(`Existing batch: ${JSON.stringify(existingBatch, null, 2)}`);
+
+        if (existingBatch.length === 0) {
+          // Create new batch
+          const batchId = ulid();
+          await db.insert(hourlyBatches).values({
+            id: batchId,
+            batchHour: batchHour,
+            entryCount: entryIds.length,
+            isProcessed: false,
+          });
+
+          // Queue a job to process this batch
+          const jobId = await boss.send('analyze-batch-trends', { batchId, entryIds }, { singletonKey: `analyze-batch-trends-${batchId}`, singletonHours: 12 });
+          logger.info(`Queued processing job for batch ${batchId} with ${entryIds.length} entries, job id ${jobId}`);
+        } else {
+          logger.info(`Batch for ${batchHour.toISOString()} already exists, skipping`);
+        }
+      } // end if entryIds.length > 0
+    } // end for
+
+    logger.info(`Completed identifying backfill batches from ${startDate} to ${endDate}`);
+    return { success: true };
+  });
+
+  // Job to process each batch
+  await boss.work<{ batchId: string, entryIds: string[] }>('analyze-batch-trends',
+    {
+      batchSize: 1
+    },
+    async ([job]) => {
+      const { batchId, entryIds } = job.data;
+      logger.info(`Processing backfill batch ${batchId} with ${entryIds.length} entries`);
+
+      try {
+        const result = await trendAnalyzer.processBatch(batchId, entryIds);
+
+        // Update batch as processed
+        await db.update(hourlyBatches)
+          .set({
+            isProcessed: true,
+            processedAt: new Date()
+          })
+          .where(eq(hourlyBatches.id, batchId));
+
+        logger.info(`Completed processing backfill batch ${batchId}`);
+        return result;
+      } catch (error) {
+        logger.error(`Error processing backfill batch ${batchId}:`, error);
+        throw error; // This will mark the job as failed in pg-boss
+      }
+    }
+  );
+}
+
+async function initializeBackfill() {
+  try {
+    const [result] = await db
+      .select({
+        earliestDate: min(entries.publishedAt),
+        latestDate: max(entries.publishedAt),
+      })
+      .from(entries);
+
+    if (result.earliestDate && result.latestDate) {
+      const startDate = new Date(result.earliestDate);
+      const endDate = new Date(result.latestDate);
+
+      logger.info(`Initializing backfill from ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+      for (let batchHour = startDate; batchHour < endDate; batchHour = new Date(batchHour.getTime() + 60 * 60 * 1000)) {
+        await queueBatchForAnalysis(batchHour);
+      }
+    } else {
+      logger.info('No entries found for backfill');
+    }
+  } catch (error) {
+    logger.error('Error initializing backfill:', error);
+  }
+}
+
+async function queueBatchForAnalysis(batchHour: Date) {
+  const batchStart = batchHour;
+  const batchEnd = new Date(batchStart.getTime() + 60 * 60 * 1000);
+
+  const batchEntries = await db.select({ id: entries.id })
+    .from(entries)
+    .where(
+      and(
+        gte(entries.publishedAt, batchStart),
+        lt(entries.publishedAt, batchEnd)
+      )
+    );
+
+  if (batchEntries.length > 0) {
+    const batchId = ulid();
+    await db.insert(hourlyBatches).values({
+      id: batchId,
+      batchHour: batchStart,
+      entryCount: batchEntries.length,
+      isProcessed: false,
+    });
+
+    await boss.send(ANALYZE_BATCH_JOB,
+      { batchId, entryIds: batchEntries.map(entry => entry.id) },
+      {
+        singletonKey: `analyze-batch-trends-${batchId}`,
+        singletonHours: 12,
+        singletonNextSlot: true,
+        retryLimit: 3,
+        retryBackoff: true
+      }
+    );
+    logger.info(`Queued backfill batch ${batchId} with ${batchEntries.length} entries`);
+  }
+}
+
+/**
+ * Trigger backfill trend analysis for past hours
+ *
+ * This function initiates a backfill job to analyze trends for entries
+ * created between the specified start and end dates. It's useful for
+ * processing historical data or catching up on trend analysis for a
+ * specific time range.
+ *
+ * @example
+ * const startDate = new Date('2023-05-01T00:00:00Z');
+ * const endDate = new Date();
+ * await triggerBackfill(startDate, endDate);
+ */
+// export async function triggerBackfill(startDate: Date, endDate: Date) {
+//   const jobId = await boss.send('identify-backfill-batches', { startDate, endDate });
+//   logger.info(`Queued backfill job ${jobId} from ${startDate} to ${endDate}`);
+//   return jobId;
+// }
 
 export async function queueEntryBatchForTrendProcessing(startId: number, endId: number) {
   const jobId = await boss.send('analyze-trends-hourly', { startId, endId });
