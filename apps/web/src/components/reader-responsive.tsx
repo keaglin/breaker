@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import DOMPurify from 'dompurify';
+import { CommandBar } from './CommandBar';
 
 function containsHTML(text: string): boolean {
   const htmlRegex = /<[a-z][\s\S]*>/i;
@@ -70,31 +71,36 @@ export default function Component({ feeds, articles }) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  const handleCommand = (cmd) => {
-    const [command, ...args] = cmd.split(' ')
+  const handleCommand = (cmd: string) => {
+    const [command, ...args] = cmd.slice(1).split(' ');
     switch (command.toUpperCase()) {
       case 'SEARCH':
         // Implement search functionality
-        break
+        break;
       case 'ADD_FEED':
         // Implement add feed functionality
-        break
+        break;
       case 'REFRESH':
         // Implement refresh functionality
-        break
+        break;
       case 'TOGGLE_RAW':
-        setShowRawFeed(!showRawFeed)
-        break
+        setShowRawFeed(!showRawFeed);
+        break;
       case 'COMPACT':
-        setCompactMode(!compactMode)
-        break
+        setCompactMode(!compactMode);
+        break;
       case 'HELP':
-        setShowSettings(true)
-        break
+        setShowSettings(true);
+        break;
       default:
       // Handle unknown command
     }
-  }
+  };
+
+  const handleArticleSelect = (articleId: number) => {
+    setSelectedArticle(articleId);
+    setView('CONTENT');
+  };
 
   const renderFeeds = () => (
     <div className="border-r-4 border-black h-full overflow-auto">
@@ -231,26 +237,12 @@ export default function Component({ feeds, articles }) {
   return (
     <div className="flex flex-col h-screen bg-white text-black font-mono text-xs" style={{ fontFamily: 'Courier, monospace' }}>
       {/* Command Bar */}
-      <div className="sticky top-0 z-10 bg-white p-2 border-b-4 border-black flex items-center space-x-2">
-        <Button
-          variant="outline"
-          className="border-2 border-black rounded-none"
-          onClick={() => setShowSettings(true)}
-        >
-          [SETTINGS]
-        </Button>
-        <Input
-          ref={commandInputRef}
-          className="flex-grow border-2 border-black rounded-none"
-          placeholder="ENTER COMMAND OR SEARCH QUERY (Press '/' to focus)"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          onKeyPress={(e) => {
-            if (e.key === 'Enter') {
-              handleCommand(command)
-              setCommand('')
-            }
-          }}
+      <div className="sticky top-0 z-10 bg-white p-2 border-b-4 border-black">
+        <CommandBar
+          commands={commands.map(cmd => cmd.name)}
+          articles={articles}
+          onCommand={handleCommand}
+          onArticleSelect={handleArticleSelect}
         />
       </div>
 
