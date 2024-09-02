@@ -3,6 +3,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
+import DOMPurify from 'dompurify';
+
+function containsHTML(text: string): boolean {
+  const htmlRegex = /<[a-z][\s\S]*>/i;
+  return htmlRegex.test(text);
+}
 
 export default function Component({ feeds, articles }) {
   const [view, setView] = useState('FEEDS')
@@ -53,8 +59,8 @@ export default function Component({ feeds, articles }) {
   ]
 
   useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName || '')) {
         event.preventDefault()
         commandInputRef.current?.focus()
       }
@@ -164,6 +170,11 @@ export default function Component({ feeds, articles }) {
           <pre className="whitespace-pre-wrap border-2 border-black p-2">
             {article.rawContent}
           </pre>
+        ) : containsHTML(article.content) ? (
+          <div
+            className="article-content"
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(article.content) }}
+          />
         ) : (
           <p>{article.content}</p>
         )}
