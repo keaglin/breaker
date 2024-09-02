@@ -13,42 +13,70 @@ function containsHTML(text: string): boolean {
 
 export default function Component({ feeds, articles }) {
   const [view, setView] = useState('FEEDS')
-  const [selectedFeed, setSelectedFeed] = useState(null)
-  const [selectedArticle, setSelectedArticle] = useState(null)
+  const [selectedFeed, setSelectedFeed] = useState<string | null>(null)
+  const [selectedArticle, setSelectedArticle] = useState<string | null>(null)
   const [showRawFeed, setShowRawFeed] = useState(false)
   const [command, setCommand] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [compactMode, setCompactMode] = useState(false)
+  const [page, setPage] = useState(1);
+  const [visibleArticles, setVisibleArticles] = useState([]);
   const commandInputRef = useRef(null)
+  const observer = useRef<IntersectionObserver | null>(null);
 
-  // const feeds = [
-  //   { id: 1, name: "TECH_NEWS", unread: 5, url: "https://technews.com/rss" },
-  //   { id: 2, name: "WORLD_EVENTS", unread: 3, url: "https://worldevents.com/rss" },
-  //   { id: 3, name: "DESIGN_TRENDS", unread: 1, url: "https://designtrends.com/rss" },
-  // ]
+  // Initialize state from URL parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const feed = params.get('feed');
+    const article = params.get('article');
+    if (feed) {
+      setSelectedFeed(feed);
+      setView('ARTICLES');
+    }
+    if (article) {
+      setSelectedArticle(article);
+      setView('CONTENT');
+    }
+  }, []);
 
-  // const articles = [
-  //   {
-  //     id: 1,
-  //     feedId: 1,
-  //     title: "AI IN WEB DEV",
-  //     content: "AI is changing how we build websites. This article explores the latest trends and technologies in AI-assisted web development, discussing the potential benefits and challenges of integrating AI into the web development workflow.",
-  //     date: "2023-06-15",
-  //     rawContent: "<item><title>AI IN WEB DEV</title><description>AI is changing how we build websites...</description><pubDate>2023-06-15</pubDate></item>",
-  //     summary: "AI tools are revolutionizing web development processes.",
-  //     keyPoints: ["Increased efficiency", "New design paradigms", "Ethical considerations"]
-  //   },
-  //   {
-  //     id: 2,
-  //     feedId: 1,
-  //     title: "THE RISE OF WEBASSEMBLY",
-  //     content: "WebAssembly is gaining traction as a powerful tool for high-performance web applications. This article delves into the basics of WebAssembly, its advantages over traditional JavaScript, and real-world use cases demonstrating its potential.",
-  //     date: "2023-06-14",
-  //     rawContent: "<item><title>THE RISE OF WEBASSEMBLY</title><description>WebAssembly is gaining traction...</description><pubDate>2023-06-14</pubDate></item>",
-  //     summary: "WebAssembly is becoming a game-changer for web performance.",
-  //     keyPoints: ["Near-native speed", "Language-agnostic", "Seamless JavaScript integration"]
-  //   },
-  // ]
+  // Update URL when selectedFeed or selectedArticle changes
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (selectedFeed !== null) {
+      params.set('feed', selectedFeed);
+    } else {
+      params.delete('feed');
+    }
+    if (selectedArticle !== null) {
+      params.set('article', selectedArticle);
+    } else {
+      params.delete('article');
+    }
+    window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+  }, [selectedFeed, selectedArticle]);
+
+  // Handle pagination on scroll
+  useEffect(() => {
+    if (observer.current) observer.current.disconnect();
+    const options = {
+      root: null,
+      rootMargin: '0px',
+      threshold: 1.0
+    };
+    observer.current = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        setPage((prevPage) => prevPage + 1);
+      }
+    }, options);
+    if (document.querySelector('#scroll-anchor')) {
+      observer.current.observe(document.querySelector('#scroll-anchor'));
+    }
+  }, []);
+
+  useEffect(() => {
+    const newArticles = articles.filter(a => a.feedId === selectedFeed).slice(0, page * 10);
+    setVisibleArticles(newArticles);
+  }, [page, selectedFeed, articles]);
 
   const commands = [
     { name: "SEARCH <query>", description: "Search feeds and articles" },
@@ -124,7 +152,7 @@ export default function Component({ feeds, articles }) {
   const renderArticles = () => (
     <div className="border-r-4 border-black h-full overflow-auto">
       <div className="p-2 border-b-4 border-black font-bold">ARTICLES</div>
-      {articles.filter(a => a.feedId === selectedFeed).map((article) => (
+      {visibleArticles.map((article) => (
         <button
           key={article.id}
           className={`w-full text-left p-2 hover:bg-gray-100 border-b-2 border-black ${selectedArticle === article.id ? 'bg-gray-200' : ''}`}
@@ -133,7 +161,7 @@ export default function Component({ feeds, articles }) {
             setView('CONTENT')
           }}
         >
-          <div className="font-bold">{article.title}</div>
+          <div className="font-bold" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(article.title) }} />
           <div className="text-xs text-gray-500">{article.date}</div>
           {!compactMode && (
             <>
@@ -147,6 +175,7 @@ export default function Component({ feeds, articles }) {
           )}
         </button>
       ))}
+      <div id="scroll-anchor" className="h-1"></div>
     </div>
   )
 
@@ -154,7 +183,10 @@ export default function Component({ feeds, articles }) {
     const article = articles.find(a => a.id === selectedArticle)
     return article ? (
       <ScrollArea className="h-full p-4">
-        <h2 className="text-lg font-bold mb-2">{article.title}</h2>
+        <h2
+          className="text-lg font-bold mb-2"
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(article.title) }}
+        ></h2>
         <p className="text-xs mb-4">{article.date}</p>
         <div className="mb-4 p-2 border-2 border-black">
           <div className="font-bold">SUMMARY:</div>
