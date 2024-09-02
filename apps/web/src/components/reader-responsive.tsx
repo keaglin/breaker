@@ -129,7 +129,7 @@ export default function Component({ feeds, articles }) {
                 {article.summary}
               </div>
               <div className="text-xs mt-2">
-                KEY_POINTS: {article.keyPoints.join(' | ')}
+                KEY_POINTS: {article.keyPoints.slice(0, 3).join(' | ')}
               </div>
             </>
           )}
