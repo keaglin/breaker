@@ -34,7 +34,7 @@ export async function processEntry(content: string): Promise<SummaryResult | Err
     // logger.debug('Raw summary result', result);
 
     const summary = result.response.candidates?.[0]?.content?.parts?.[0]?.text;
-    console.debug('Raw summary', summary);
+    // console.debug('Raw summary', summary);
 
     const parsedSummary: SummaryResult = JSON.parse(summary ?? '');
     //   console.debug('Parsed summary', parsedSummary);
