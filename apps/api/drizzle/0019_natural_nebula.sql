@@ -1,0 +1,1 @@
+ALTER TABLE "hourly_batches" ADD CONSTRAINT "hourly_batches_batch_hour_unique" UNIQUE("batch_hour");

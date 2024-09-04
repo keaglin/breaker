@@ -46,7 +46,7 @@ export const trends = pgTable('trends', {
 
 export const hourlyBatches = pgTable('hourly_batches', {
   id: text('id').primaryKey(),
-  batchHour: timestamp('batch_hour').notNull(),
+  batchHour: timestamp('batch_hour').notNull().unique(),
   processedAt: timestamp('processed_at', { withTimezone: true }),
   entryCount: integer('entry_count').notNull(),
   isProcessed: boolean('is_processed').notNull().default(false),
