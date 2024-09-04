@@ -5,7 +5,7 @@ import logger from '../../../packages/utils/src/logger';
 import { entries, feeds } from './db/schema';
 import { db } from './db';
 import { minifluxClient } from './services/miniflux/client';
-import { initializePgBoss } from './pgboss';
+import { initializePgBoss, shutdownPgBoss } from './pgboss/client';
 import { desc } from 'drizzle-orm';
 
 const app = new OpenAPIHono()
@@ -15,11 +15,11 @@ app.use('*', sentry({
 }))
 
 // Global middleware
-// app.use('*', async (c, next) => {
-//   logger.info(`Request received: ${c.req.method} ${c.req.url}`)
-//   await next()
-//   logger.info(`Response sent: ${c.res.status} ${c.res.statusText}`)
-// })
+app.use('*', async (c, next) => {
+  logger.info(`Request received: ${c.req.method} ${c.req.url}`)
+  await next()
+  logger.info(`Response sent: ${c.res.status} ${c.res.statusText}`)
+})
 
 app.onError((err, c) => {
   logger.error('Unhandled error', { error: err });
@@ -70,15 +70,39 @@ app.doc('/doc', {
   },
 })
 
-await initializePgBoss()
 
 const port = 3000;
 console.log(`Server is running on http://localhost:${port}`);
 
 export type AppType = typeof app
 
+async function startServer() {
+  await initializePgBoss()
+  serve({
+    fetch: app.fetch,
+    port: port,
+  });
+}
 
-serve({
-  fetch: app.fetch,
-  port: port,
+async function stopServer() {
+  await shutdownPgBoss()
+}
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received. Shutting down gracefully.');
+  await stopServer();
+  process.exit(0);
 });
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received. Shutting down gracefully.');
+  await stopServer();
+  process.exit(0);
+});
+
+startServer().catch(error => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+});
+
