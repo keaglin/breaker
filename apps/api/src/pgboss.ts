@@ -390,7 +390,7 @@ async function setupBackfillJobs() {
         )
       )
       .groupBy(sql`date_trunc('hour', ${entries.publishedAt})`)
-      .orderBy(sql`date_trunc('hour', ${entries.publishedAt})`);
+      .orderBy(desc(entries.publishedAt));
 
     console.debug(`Entries by hour: ${JSON.stringify(entriesByHour[0], null, 2)}`);
 
