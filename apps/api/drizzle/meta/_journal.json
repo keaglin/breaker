@@ -141,6 +141,13 @@
       "when": 1725423013786,
       "tag": "0019_natural_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1725439122957,
+      "tag": "0020_curved_madrox",
+      "breakpoints": true
     }
   ]
 }

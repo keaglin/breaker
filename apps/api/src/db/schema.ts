@@ -51,3 +51,12 @@ export const hourlyBatches = pgTable('hourly_batches', {
   entryCount: integer('entry_count').notNull(),
   isProcessed: boolean('is_processed').notNull().default(false),
 });
+
+export const summaryJobStats = pgTable('summary_job_stats', {
+  id: text('id').primaryKey(),
+  dailyRequestCount: integer('daily_request_count').notNull().default(0),
+  tokenUsageLastMinute: integer('token_usage_last_minute').notNull().default(0),
+  lastMinuteReset: timestamp('last_minute_reset').notNull().defaultNow(),
+  lastUpdated: timestamp('last_updated').notNull().defaultNow(),
+  entryId: text('entry_id').references(() => entries.id).notNull(),
+});
