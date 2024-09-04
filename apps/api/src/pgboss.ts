@@ -236,7 +236,7 @@ async function setupEntrySummarizationJobs() {
     const unprocessedEntries = await db.select({ id: entries.id, content: entries.content })
       .from(entries)
       .where(eq(entries.processedForSummary, false))
-      .orderBy(entries.id)
+      .orderBy(desc(entries.publishedAt))
       .limit(SUMMARY_BATCH_SIZE);
 
     for (const entry of unprocessedEntries) {
