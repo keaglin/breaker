@@ -330,29 +330,15 @@ async function setupMinifluxSync(intervalMinutes: number) {
     try {
       const { allFeeds, newEntries } = await fetchNewData();
 
-      logger.info(`Fetched ${allFeeds.length} new feeds and ${newEntries.length} new entries`);
+      logger.info(`Sync completed. Fetched data for ${allFeeds.length} feeds.`);
+      logger.info(`Found ${newEntries.length} new entries.`);
 
-      // Store new entries in the database first
+      // Store new entries in the database
       const { entries } = await storeProcessedData(allFeeds, newEntries);
 
-      if (Array.isArray(entries)) {
-        logger.info(`Queueing ${entries.length} entries for summarization`);
-        for (const entry of entries) {
-          const id = await boss.send({
-            name: SUMMARIZE_ENTRY_JOB_NAME,
-            data: {
-              entryId: entry.id, // This is now the database ULID
-              content: entry.content
-            }
-          });
-          logger.debug(`Queued entry for summarization: ${entry.id} with job id ${id}`);
-        }
-      } else {
-        logger.warn(`entries is not an array`, typeof entries);
-      }
+      logger.info(`Stored ${entries.length} new entries in the database.`);
 
-      logger.info(`Miniflux sync job ${job.id} completed successfully`);
-      return { success: true, newFeedsCount: allFeeds.length, newEntriesCount: newEntries.length };
+      return { success: true, newEntriesCount: entries.length };
     } catch (error) {
       logger.error(`Error during Miniflux sync job ${job.id}`, { error });
       throw error; // This will mark the job as failed in pg-boss
