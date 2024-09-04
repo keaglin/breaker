@@ -9,6 +9,7 @@ import { ulid } from 'ulid';
 import { fetchNewData } from './services/miniflux/fetcher';
 import { storeProcessedData, type StoredEntry } from './services/miniflux/storeData';
 import invariant from 'tiny-invariant';
+import { extractTextFromHtml } from '@/packages/utils/src/extract-text-from-html';
 
 
 invariant(process.env.MINIFLUX_API_KEY, 'MINIFLUX_API_KEY is not set');
@@ -282,7 +283,7 @@ async function setupEntrySummarizationJobs() {
       }
 
       // Estimate token usage
-      const estimatedTokens = content.split(/\s+/).length * 1.3;
+      const estimatedTokens = extractTextFromHtml(content).split(/\s+/).length * 1.3;
 
       if (tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
         logger.warn('Token per minute limit reached. Failing job to retry later.');
