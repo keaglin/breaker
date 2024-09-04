@@ -240,7 +240,7 @@ async function setupEntrySummarizationJobs() {
       .limit(SUMMARY_BATCH_SIZE);
 
     for (const entry of unprocessedEntries) {
-      await boss.send('summarize-entry', { entryId: entry.id, content: entry.content }, {
+      await boss.send('summarize-entry', { entryId: entry.id, content: extractTextFromHtml(entry.content!) }, {
         singletonKey: `summarize-entry-${entry.id}`,
         singletonHours: 12,
         retryLimit: 3,
