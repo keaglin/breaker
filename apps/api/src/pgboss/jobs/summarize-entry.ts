@@ -1,21 +1,18 @@
 import { extractTextFromHtml } from "@/packages/utils/src/extract-text-from-html";
 import logger from "@/packages/utils/src/logger";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { getBossInstance } from "../client";
 import { db } from "../../db";
-import { entries } from "../../db/schema";
+import { entries, summaryJobStats } from "../../db/schema";
 import { processEntry } from "../../entry-processor";
 import { QueueNames } from "../initQueues";
+import { ulid } from "ulid";
 
-const SUMMARY_BATCH_SIZE = 10;
-const SUMMARY_INTERVAL_MINUTES = 5;
+const SUMMARY_INTERVAL_MINUTES = 2; // originally had this set at 5min, but we want to be able to summarize more than 288 per day
 // API rate limit constants
 const REQUESTS_PER_MINUTE = 15;
-const REQUESTS_PER_DAY = 1500;
-const TOKENS_PER_MINUTE = 1000000;
-
-let tokenUsageLastMinute = 0;
-let lastMinuteReset = Date.now();
+const REQUESTS_PER_DAY = 1_500;
+const TOKENS_PER_MINUTE = 1_000_000;
 
 // Adjust these values based on your average token usage per request
 const ESTIMATED_TOKENS_PER_REQUEST = 1000;
@@ -24,106 +21,123 @@ const ESTIMATED_TOKENS_PER_REQUEST = 1000;
 const SUMMARIZE_RATE_LIMIT = Math.min(REQUESTS_PER_MINUTE, Math.floor(TOKENS_PER_MINUTE / ESTIMATED_TOKENS_PER_REQUEST));
 const SUMMARIZE_RATE_LIMIT_INTERVAL = 60 * 1000; // 60 seconds in milliseconds
 
-// Daily limit tracker
-let dailyRequestCount = 0;
-const DAILY_RESET_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-
-// Reset daily count every 24 hours
-setInterval(() => {
-  dailyRequestCount = 0;
-}, DAILY_RESET_INTERVAL);
 
 export async function setupEntrySummarizationJobs() {
   const boss = await getBossInstance();
   // Queue entries for summarization every 5 minutes
   logger.debug('Setting up entry summarization queue');
-  await boss.schedule('queue-entries-for-summaries', `*/${SUMMARY_INTERVAL_MINUTES} * * * *`);
+  await boss.schedule(QueueNames.SUMMARIZE_ENTRY,
+    `*/${SUMMARY_INTERVAL_MINUTES} * * * *`, {},
+    { singletonKey: 'summarize-entry', singletonHours: 12, retryDelay: 4000, retryLimit: 3, retryBackoff: true });
 
   // Summarize entries with rate limiting
   logger.debug('Setting up summarize entry job with rate limiting');
 
-  await boss.work('queue-entries-for-summaries', async ([job]) => {
-    logger.info(`Running entry summarization queueing job ${job.id}`);
-    const unprocessedEntries = await db.select({ id: entries.id, content: entries.content })
+  await boss.work(QueueNames.SUMMARIZE_ENTRY, { batchSize: 1 }, async ([job]) => {
+    logger.info(`Started processing summary job ${job.id}`);
+
+    const [entry] = await db.select({ id: entries.id, content: entries.content, processedForSummary: entries.processedForSummary })
       .from(entries)
-      .where(eq(entries.processedForSummary, false))
       .orderBy(desc(entries.publishedAt))
-      .limit(SUMMARY_BATCH_SIZE);
+      .where(eq(entries.processedForSummary, false))
+      .limit(1);
 
-    if (!boss) {
-      logger.error('PgBoss is not initialized');
-      return { success: false, error: 'PgBoss is not initialized' };
+    if (!entry) {
+      logger.info('No entries to process');
+      return { success: true, noEntries: true };
     }
 
-    for (const entry of unprocessedEntries) {
-      // logger.debug(`Queueing entry for summarization: ${entry.id}`);
-      // logger.debug(`Content: ${extractTextFromHtml(entry.content!)}`);
+    const { id: entryId, processedForSummary } = entry;
+    const content = extractTextFromHtml(entry.content!);
 
-      try {
-        const id = await boss.send(QueueNames.SUMMARIZE_ENTRY, { entryId: entry.id, content: extractTextFromHtml(entry.content!) }, {
-          singletonKey: `summarize-entry-${entry.id}`,
-          singletonHours: 12,
-          retryLimit: 3,
-          retryDelay: SUMMARIZE_RATE_LIMIT_INTERVAL / SUMMARIZE_RATE_LIMIT,
-          retryBackoff: true
-        });
-        if (!id) {
-          logger.error(`Failed to queue summarize-entry job for entry ${entry.id}`);
-        } else {
-          logger.info(`Queued summarize-entry job ${id} for entry ${entry.id}`);
-        }
-      } catch (error) {
-        logger.error(`Error queuing entry for summarization: ${entry.id}`, error);
-      }
+    if (!content) {
+      logger.error(`Entry ${entryId} has no content. Skipping.`);
+      return { success: false, entryId, error: 'No content' };
     }
 
-    logger.info(`Queued ${unprocessedEntries.length} entries for summarization`);
-    return { success: true, queuedCount: unprocessedEntries.length, entryIds: unprocessedEntries.map(e => e.id) };
-  });
-
-  await boss.work<{ entryId: string, content: string }>(QueueNames.SUMMARIZE_ENTRY, { batchSize: SUMMARIZE_RATE_LIMIT }, async ([job]) => {
-    logger.info(`Started processing summary job ${job.id} for entry ${job.data.entryId}`);
-    const { entryId, content } = job.data;
+    logger.info(`Processing summary for entry ${entryId}`);
 
     try {
-      const existingEntry = await db.select({ processedForSummary: entries.processedForSummary })
-        .from(entries)
-        .where(eq(entries.id, entryId))
-        .limit(1);
-
       // Check if the entry has already been processed
-      if (existingEntry[0]?.processedForSummary) {
+      if (processedForSummary) {
         logger.info(`Entry ${entryId} has already been processed. Skipping.`);
         return { success: true, entryId, alreadyProcessed: true };
       }
 
+      // Estimate token usage
+      const estimatedTokens = Math.ceil(content.length / 3);
+
+      const now = new Date();
+
+      // First, try to update an existing record
+      const updateResult = await db.update(summaryJobStats)
+        .set({
+          lastUpdated: now,
+          dailyRequestCount: sql`CASE
+            WHEN ${summaryJobStats.lastUpdated} < NOW() - INTERVAL '24 hours'
+            THEN 1
+            ELSE ${summaryJobStats.dailyRequestCount} + 1
+          END`,
+          tokenUsageLastMinute: 0,
+          lastMinuteReset: now,
+        })
+        .where(eq(summaryJobStats.entryId, entryId))
+        .returning({ updatedId: summaryJobStats.id });
+
+      // If no record was updated, insert a new one
+      if (updateResult.length === 0) {
+        logger.info(`No existing summaryJobStats record found for entry ${entryId}. Inserting new record.`);
+        await db.insert(summaryJobStats)
+          .values({
+            id: ulid(),
+            entryId,
+            dailyRequestCount: 1,
+            tokenUsageLastMinute: 0,
+            lastMinuteReset: now,
+            lastUpdated: now,
+          });
+      }
+
+      // Fetch the most recent stats
+      const [stats] = await db.select()
+        .from(summaryJobStats)
+        .orderBy(desc(summaryJobStats.lastUpdated))
+        .limit(1);
+
       // Check daily limit
-      if (dailyRequestCount >= REQUESTS_PER_DAY) {
+      if (stats.dailyRequestCount > REQUESTS_PER_DAY) {
         logger.warn('Daily request limit reached. Skipping job.');
         return { success: false, entryId, error: 'Daily request limit reached' };
       }
 
       // Check and reset per-minute token usage
-      const now = Date.now();
-      if (now - lastMinuteReset > 60000) {
-        tokenUsageLastMinute = 0;
-        lastMinuteReset = now;
+      if (now.getTime() - stats.lastMinuteReset.getTime() > SUMMARIZE_RATE_LIMIT_INTERVAL) {
+        await db.update(summaryJobStats)
+          .set({
+            tokenUsageLastMinute: 0,
+            lastMinuteReset: now,
+          })
+          .where(eq(summaryJobStats.entryId, entryId));
+        stats.tokenUsageLastMinute = 0;
       }
 
-      // Estimate token usage
-      const estimatedTokens = extractTextFromHtml(content).split(/\s+/).length * 1.3;
-
-      if (tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
+      if (stats.tokenUsageLastMinute + estimatedTokens > TOKENS_PER_MINUTE) {
         logger.warn('Token per minute limit reached. Failing job to retry later.');
         return { success: false, entryId, error: 'Rate limit reached' };
       }
 
-      dailyRequestCount++;
-      tokenUsageLastMinute += estimatedTokens;
+      // Update stats
+      await db.update(summaryJobStats)
+        .set({
+          dailyRequestCount: stats.dailyRequestCount + 1,
+          tokenUsageLastMinute: stats.tokenUsageLastMinute + estimatedTokens,
+          lastUpdated: now,
+        })
+        .where(eq(summaryJobStats.entryId, entryId));
 
       const summaryResult = await processEntry(content);
       if (summaryResult instanceof Error) {
-        logger.error(`Error processing summary for entry ${entryId}:`, summaryResult);
+        logger.error(`Error processing summary for entry ${entryId}: `, summaryResult);
         return { success: false, entryId, error: summaryResult.message };
       }
 
@@ -140,7 +154,7 @@ export async function setupEntrySummarizationJobs() {
       logger.info(`Completed summary for entry ${entryId}`);
       return { success: true, entryId, summarized: true };
     } catch (error) {
-      logger.error(`Unexpected error processing summary for entry ${entryId}:`, error);
+      logger.error(`Unexpected error processing summary for entry ${entryId}: `, error);
       return { success: false, entryId, error: 'Unexpected error occurred' };
     }
   });
