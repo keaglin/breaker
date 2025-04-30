@@ -48,11 +48,16 @@ export async function setupEntrySummarizationJobs() {
     }
 
     const { id: entryId, processedForSummary } = entry;
+    logger.debug(`Processing summary for entry ${entryId}`);
+    if (!entryId) {
+      logger.error('Entry ID is undefined but required');
+      return { success: false, entryId, error: 'No entry ID' };
+    }
     const content = extractTextFromHtml(entry.content!);
 
     if (!content) {
-      logger.error(`Entry ${entryId} has no content. Skipping.`);
-      return { success: false, entryId, error: 'No content' };
+      logger.warn(`Entry ${entryId} has no content. Skipping.`);
+      return { success: true, entryId, noContent: true };
     }
 
     logger.info(`Processing summary for entry ${entryId}`);

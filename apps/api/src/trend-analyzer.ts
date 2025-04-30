@@ -34,6 +34,7 @@ export class TrendAnalyzer {
   private db: ReturnType<typeof drizzle>;
   private sink: ArrayBufferSink;
   private trendCounts: Map<string, number> = new Map();
+  private coOccurrences: Record<string, Record<string, number>> = {};
 
   constructor() {
     this.db = db;
@@ -104,6 +105,7 @@ export class TrendAnalyzer {
 
     const originalWords = plainText.toLowerCase().split(/\W+/);
     const words = this.filterStopwords(originalWords);
+    const coOccurrences = this.analyzeCoOccurrence(words);
 
     logger.debug(`Original word count: ${originalWords.length}`);
     logger.debug(`Word count after removing stopwords: ${words.length}`);
@@ -189,10 +191,29 @@ export class TrendAnalyzer {
     return trends;
   }
 
-  private async markEntriesAsProcessed(startId: string, endId: string) {
-    await this.db.update(entries)
-      .set({ processedForTrends: true })
-      .where(sql`${entries.id} >= ${startId} AND ${entries.id} <= ${endId}`);
+
+  // Analyze which words frequently appear together to identify related concepts
+  // This is a simplified co-occurrence analysis
+  private analyzeCoOccurrence(words: string[], windowSize: number = 5) {
+    const coOccurrences: Record<string, Record<string, number>> = {};
+
+    for (let i = 0; i < words.length; i++) {
+      const currentWord = words[i];
+
+      for (let j = Math.max(0, i - windowSize); j < Math.min(words.length, i + windowSize + 1); j++) {
+        if (i !== j) {
+          const neighborWord = words[j];
+
+          if (!coOccurrences[currentWord]) {
+            coOccurrences[currentWord] = {};
+          }
+
+          coOccurrences[currentWord][neighborWord] = (coOccurrences[currentWord][neighborWord] || 0) + 1;
+        }
+      }
+    }
+
+    return coOccurrences;
   }
 
   async getDailyTrends(startDate: Date) {
@@ -269,16 +290,6 @@ export class TrendAnalyzer {
     return result.rows;
   }
 
-  // Add methods to manage stopwords
-  // addStopword(word: string) {
-  //   addCustomStopword(word);
-  // }
-
-  // removeStopword(word: string) {
-  //   removeCustomStopword(word);
-  // }
-
-  // Add these methods to your TrendAnalyzer class
 
   async getTrendsForBatch(batchId: string) {
     const batch = await this.db.select().from(hourlyBatches).where(eq(hourlyBatches.id, batchId)).limit(1);
@@ -358,6 +369,13 @@ export class TrendAnalyzer {
       batchHour: batchTrends.find(t => t.batchId === batchId)?.batchHour,
       trends
     }));
+  }
+
+  async getTopCoOccurrences(word: string, limit: number = 10) {
+    const coOccurrences = this.coOccurrences[word] || {};
+    return Object.entries(coOccurrences)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit);
   }
 }
 

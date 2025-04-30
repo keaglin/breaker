@@ -7,6 +7,8 @@ export function extractTextFromHtml(html: string): string {
   // Remove script and style elements
   document.querySelectorAll('script, style').forEach((el: Element) => el.remove());
 
-  // Get the text content
-  return document.body.textContent || '';
+  const text = document.body.textContent ?? document.body.innerText;
+  // console.log('text', text);
+
+  return text
 }

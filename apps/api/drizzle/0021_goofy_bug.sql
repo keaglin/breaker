@@ -1,0 +1,1 @@
+ALTER TABLE "summary_job_stats" ALTER COLUMN "entry_id" DROP NOT NULL;

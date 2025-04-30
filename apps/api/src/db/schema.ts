@@ -58,5 +58,5 @@ export const summaryJobStats = pgTable('summary_job_stats', {
   tokenUsageLastMinute: integer('token_usage_last_minute').notNull().default(0),
   lastMinuteReset: timestamp('last_minute_reset').notNull().defaultNow(),
   lastUpdated: timestamp('last_updated').notNull().defaultNow(),
-  entryId: text('entry_id').references(() => entries.id).notNull(),
+  entryId: text('entry_id').references(() => entries.id),
 });

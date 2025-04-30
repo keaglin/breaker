@@ -148,6 +148,13 @@
       "when": 1725439122957,
       "tag": "0020_curved_madrox",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1725457816707,
+      "tag": "0021_goofy_bug",
+      "breakpoints": true
     }
   ]
 }
